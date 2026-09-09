@@ -118,7 +118,12 @@ jobs:
           fi
 
       - name: Terraform Validate
-        run: terraform validate
+        run: |
+          if ! terraform validate 2>&1 | tee /tmp/validate.log; then
+            VAL_ERR=$(cat /tmp/validate.log | tr '\r\n' ' ' | head -c 3000)
+            echo "::error title=Terraform Validate Failed::$VAL_ERR"
+            exit 1
+          fi
 
       - name: Terraform Plan
         id: plan
