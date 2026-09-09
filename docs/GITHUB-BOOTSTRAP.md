@@ -113,9 +113,9 @@ gh auth login
 Follow [GITHUB-OIDC.md](GITHUB-OIDC.md):
 
 1. App registration — **do not create a client secret**
-2. Federated credentials for `sunilkrdeep/aks-infr` and `sunilkrdeep/sample-app`
+2. Federated credentials for `sunilkrdeep/aks-infra` and `sunilkrdeep/sample-app`
 3. Put `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` in **Variables** (GUIDs only)
-4. `TF_STATE_*` on **aks-infr**
+4. `TF_STATE_*` on **aks-infra**
 
 Never add `AZURE_CLIENT_SECRET` or `AZURE_CREDENTIALS` JSON to GitHub.
 

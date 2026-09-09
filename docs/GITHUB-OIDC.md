@@ -21,7 +21,7 @@ Applies to:
 
 | GitHub repo | Local folder |
 |-------------|--------------|
-| `aks-infr` (your repo name) | `aks-cluster/` |
+| `aks-infra` (your repo name) | `aks-cluster/` |
 | `sample-app` | `sample-app/` |
 
 ---
@@ -67,23 +67,23 @@ az role assignment create `
 
 ## 2. Federated credentials (replaces passwords)
 
-Subjects must match your real repos (`sunilkrdeep` / `aks-infr`):
+Subjects must match your real repos (`sunilkrdeep` / `aks-infra`):
 
 ```powershell
 $CLIENT_ID = "<appId>"
 $APP_OBJECT_ID = (az ad app show --id $CLIENT_ID --query id -o tsv)
 
 az ad app federated-credential create --id $APP_OBJECT_ID --parameters '{
-  "name": "aks-infr-main",
+  "name": "aks-infra-main",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:sunilkrdeep/aks-infr:ref:refs/heads/main",
+  "subject": "repo:sunilkrdeep/aks-infra:ref:refs/heads/main",
   "audiences": ["api://AzureADTokenExchange"]
 }'
 
 az ad app federated-credential create --id $APP_OBJECT_ID --parameters '{
-  "name": "aks-infr-pr",
+  "name": "aks-infra-pr",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:sunilkrdeep/aks-infr:pull_request",
+  "subject": "repo:sunilkrdeep/aks-infra:pull_request",
   "audiences": ["api://AzureADTokenExchange"]
 }'
 
@@ -103,7 +103,7 @@ If PowerShell mangles JSON, write each body to a `.json` file and use `@file.jso
 
 Settings → Secrets and variables → Actions → **Variables** (not Secrets).
 
-### Both repos (`aks-infr` and `sample-app`)
+### Both repos (`aks-infra` and `sample-app`)
 
 | Variable | Value |
 |----------|-------|
@@ -113,7 +113,7 @@ Settings → Secrets and variables → Actions → **Variables** (not Secrets).
 
 These are identifiers. Workflows request an OIDC token; Entra exchanges it for a short-lived Azure token. Nothing reusable is stored on GitHub.
 
-### `aks-infr` only (from bootstrap-state)
+### `aks-infra` only (from bootstrap-state)
 
 | Variable | Example |
 |----------|---------|
@@ -155,8 +155,8 @@ Workflows use `azure/login@v2` with `client-id` / `tenant-id` / `subscription-id
 
 | Error | Fix |
 |-------|-----|
-| `AADSTS700016` / federated credential not found | Subject must match exactly (`repo:sunilkrdeep/aks-infr:ref:refs/heads/main`) |
+| `AADSTS700016` / federated credential not found | Subject must match exactly (`repo:sunilkrdeep/aks-infra:ref:refs/heads/main`) |
 | `AuthorizationFailed` on state | Add **Storage Blob Data Contributor** on `rg-tfstate` |
 | `subscription_id must be specified` | Set Variable `AZURE_SUBSCRIPTION_ID` |
 | Login looks for a secret | You may still have old workflow expecting Secrets — pull latest workflows that use `vars.*` |
-| ACR push denied | Finish aks-infr apply; set `ACR_NAME` on sample-app |
+| ACR push denied | Finish aks-infra apply; set `ACR_NAME` on sample-app |

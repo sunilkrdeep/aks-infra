@@ -3,7 +3,8 @@
 # main → apply
 #
 # OIDC only — no Azure client secrets / passwords on GitHub.
-# Variables (not Secrets): AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
+# Set repository Variables (Settings → Actions → Variables):
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
 #   TF_STATE_*, optional TF_VAR_*
 
 name: Terraform
@@ -23,11 +24,6 @@ permissions:
 env:
   TF_IN_AUTOMATION: "true"
   ARM_USE_OIDC: "true"
-  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-  # GUIDs only — auth is short-lived OIDC token, not a stored password
-  TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
 jobs:
   terraform:
@@ -41,18 +37,48 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Resolve Azure OIDC IDs
+        id: azure
+        env:
+          VAR_CLIENT: ${{ vars.AZURE_CLIENT_ID }}
+          VAR_TENANT: ${{ vars.AZURE_TENANT_ID }}
+          VAR_SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          SEC_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
+          SEC_TENANT: ${{ secrets.AZURE_TENANT_ID }}
+          SEC_SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          CLIENT_ID="${VAR_CLIENT:-$SEC_CLIENT}"
+          TENANT_ID="${VAR_TENANT:-$SEC_TENANT}"
+          SUBSCRIPTION_ID="${VAR_SUB:-$SEC_SUB}"
+          if [ -z "$CLIENT_ID" ] || [ -z "$TENANT_ID" ] || [ -z "$SUBSCRIPTION_ID" ]; then
+            echo "::error::Missing AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID."
+            echo "::error::Add them under Settings → Secrets and variables → Actions → Variables (preferred) or Secrets."
+            echo "::error::Do NOT create an Azure client secret — OIDC federated credentials only."
+            exit 1
+          fi
+          echo "client_id=$CLIENT_ID" >> "$GITHUB_OUTPUT"
+          echo "tenant_id=$TENANT_ID" >> "$GITHUB_OUTPUT"
+          echo "subscription_id=$SUBSCRIPTION_ID" >> "$GITHUB_OUTPUT"
+
       - name: Azure Login (OIDC — no client secret)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ steps.azure.outputs.client_id }}
+          tenant-id: ${{ steps.azure.outputs.tenant_id }}
+          subscription-id: ${{ steps.azure.outputs.subscription_id }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.9.8"
           terraform_wrapper: false
+
+      - name: Export ARM / TF env for Terraform
+        run: |
+          echo "ARM_CLIENT_ID=${{ steps.azure.outputs.client_id }}" >> "$GITHUB_ENV"
+          echo "ARM_TENANT_ID=${{ steps.azure.outputs.tenant_id }}" >> "$GITHUB_ENV"
+          echo "ARM_SUBSCRIPTION_ID=${{ steps.azure.outputs.subscription_id }}" >> "$GITHUB_ENV"
+          echo "TF_VAR_subscription_id=${{ steps.azure.outputs.subscription_id }}" >> "$GITHUB_ENV"
 
       - name: Terraform fmt
         id: fmt
