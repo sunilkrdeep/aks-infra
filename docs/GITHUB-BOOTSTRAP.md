@@ -108,24 +108,16 @@ gh auth login
 
 ---
 
-## 4. Configure OIDC + secrets / variables
+## 4. Configure OIDC + variables (no Azure passwords on GitHub)
 
-Follow [GITHUB-OIDC.md](GITHUB-OIDC.md). In every subject string use your free username:
+Follow [GITHUB-OIDC.md](GITHUB-OIDC.md):
 
-```text
-repo:YOUR_USER/aks-infra:ref:refs/heads/main
-repo:YOUR_USER/aks-infra:pull_request
-repo:YOUR_USER/sample-app:ref:refs/heads/main
-```
+1. App registration — **do not create a client secret**
+2. Federated credentials for `sunilkrdeep/aks-infr` and `sunilkrdeep/sample-app`
+3. Put `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` in **Variables** (GUIDs only)
+4. `TF_STATE_*` on **aks-infr**
 
-In the browser for each repo:
-
-**Settings → Secrets and variables → Actions**
-
-| Repo | Secrets | Variables |
-|------|---------|-----------|
-| `aks-infra` | `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | `TF_STATE_*` (+ optional `TF_VAR_*`) |
-| `sample-app` | same three Azure secrets | `ACR_NAME`, `AKS_RESOURCE_GROUP`, `AKS_CLUSTER_NAME` (after infra apply) |
+Never add `AZURE_CLIENT_SECRET` or `AZURE_CREDENTIALS` JSON to GitHub.
 
 ---
 

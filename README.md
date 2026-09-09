@@ -67,9 +67,10 @@ terraform output acr_login_server
 
 Workflow: [`.github/workflows/terraform.yml`](.github/workflows/terraform.yml)
 
-Required GitHub **Secrets**: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`  
-Required GitHub **Variables**: `TF_STATE_RESOURCE_GROUP`, `TF_STATE_STORAGE_ACCOUNT`, `TF_STATE_CONTAINER`, `TF_STATE_KEY`  
+Required GitHub **Variables** (not Secrets / not passwords): `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `TF_STATE_RESOURCE_GROUP`, `TF_STATE_STORAGE_ACCOUNT`, `TF_STATE_CONTAINER`, `TF_STATE_KEY`  
 Optional Variables: `TF_VAR_location`, `TF_VAR_resource_group_name`, `TF_VAR_cluster_name`, `TF_VAR_node_count`, `TF_VAR_node_vm_size`
+
+Auth is **OIDC** only — never add `AZURE_CLIENT_SECRET` or `AZURE_CREDENTIALS` to GitHub. See [docs/GITHUB-OIDC.md](docs/GITHUB-OIDC.md).
 
 Never commit `terraform.tfvars`, `backend.hcl`, or `*.tfstate`.
 

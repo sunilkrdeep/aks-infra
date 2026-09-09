@@ -1,166 +1,162 @@
 # GitHub Actions ↔ Azure OIDC (both repos)
 
-Use **OpenID Connect** so GitHub Actions get short-lived Azure tokens. No long-lived client secrets in GitHub.
+## Rule: never store Azure credentials on GitHub
+
+| Store on GitHub? | What | Why |
+|------------------|------|-----|
+| **Never** | Client secret / password / certificate private key | Real credentials — anyone with them can sign in as the app |
+| **Never** | `AZURE_CREDENTIALS` JSON with `clientSecret` | Same as above |
+| **Never** | `terraform.tfvars`, `backend.hcl`, `*.tfstate` in git | May contain subscription / secrets |
+| **OK (Variables)** | Application (client) ID, Tenant ID, Subscription ID | Public GUIDs — **not** passwords; auth still requires a short-lived OIDC token |
+
+Auth model:
+
+```text
+GitHub Actions  --OIDC token-->  Entra ID  --short-lived access token-->  Azure APIs
+```
+
+No password is saved in the repo or in GitHub Secrets.
 
 Applies to:
 
 | GitHub repo | Local folder |
 |-------------|--------------|
-| `aks-infra` | `aks-cluster/` |
+| `aks-infr` (your repo name) | `aks-cluster/` |
 | `sample-app` | `sample-app/` |
 
 ---
 
-## 1. Create an App Registration
+## 1. Create an App Registration (**do not create a client secret**)
 
 ```powershell
 az login
 az account show --query "{subscription:id, tenant:tenantId}" -o json
 
-# Create app + service principal
 $APP_NAME = "github-aks-cicd"
-az ad app create --display-name $APP_NAME --query appId -o tsv
-# Save CLIENT_ID from output
-$CLIENT_ID = "<paste-appId>"
-
+$CLIENT_ID = az ad app create --display-name $APP_NAME --query appId -o tsv
 az ad sp create --id $CLIENT_ID
-$TENANT_ID = (az account show --query tenantId -o tsv)
-$SUBSCRIPTION_ID = (az account show --query id -o tsv)
+$TENANT_ID = az account show --query tenantId -o tsv
+$SUBSCRIPTION_ID = az account show --query id -o tsv
+
+Write-Host "CLIENT_ID=$CLIENT_ID"
+Write-Host "TENANT_ID=$TENANT_ID"
+Write-Host "SUBSCRIPTION_ID=$SUBSCRIPTION_ID"
 ```
 
-Grant roles (lab-friendly; tighten later in production):
+In Azure Portal → App registrations → your app → **Certificates & secrets**:
+
+- Do **not** click “New client secret”
+- Trust comes only from **Federated credentials** (next section)
+
+Grant roles:
 
 ```powershell
-# Create / manage AKS, ACR, networking
 az role assignment create `
   --assignee $CLIENT_ID `
   --role Contributor `
   --scope "/subscriptions/$SUBSCRIPTION_ID"
 
-# Read/write Terraform state blobs (after bootstrap-state)
+# After bootstrap-state has created rg-tfstate:
 az role assignment create `
   --assignee $CLIENT_ID `
   --role "Storage Blob Data Contributor" `
   --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/rg-tfstate"
 ```
 
-Also ensure the identity can use Azure AD for storage (`use_azuread_auth = true`). Contributor on the storage account RG is usually enough together with Blob Data Contributor.
-
 ---
 
-## 2. Federated credentials (two repos)
+## 2. Federated credentials (replaces passwords)
 
-Replace `YOUR_ORG` with your GitHub user or org. Replace app object id if your CLI version requires it.
+Subjects must match your real repos (`sunilkrdeep` / `aks-infr`):
 
 ```powershell
 $CLIENT_ID = "<appId>"
 $APP_OBJECT_ID = (az ad app show --id $CLIENT_ID --query id -o tsv)
 
-# --- aks-infra: pushes to main ---
 az ad app federated-credential create --id $APP_OBJECT_ID --parameters '{
-  "name": "aks-infra-main",
+  "name": "aks-infr-main",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:YOUR_ORG/aks-infra:ref:refs/heads/main",
+  "subject": "repo:sunilkrdeep/aks-infr:ref:refs/heads/main",
   "audiences": ["api://AzureADTokenExchange"]
 }'
 
-# --- aks-infra: pull requests (terraform plan) ---
 az ad app federated-credential create --id $APP_OBJECT_ID --parameters '{
-  "name": "aks-infra-pr",
+  "name": "aks-infr-pr",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:YOUR_ORG/aks-infra:pull_request",
+  "subject": "repo:sunilkrdeep/aks-infr:pull_request",
   "audiences": ["api://AzureADTokenExchange"]
 }'
 
-# --- sample-app: pushes to main ---
 az ad app federated-credential create --id $APP_OBJECT_ID --parameters '{
   "name": "sample-app-main",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:YOUR_ORG/sample-app:ref:refs/heads/main",
+  "subject": "repo:sunilkrdeep/sample-app:ref:refs/heads/main",
   "audiences": ["api://AzureADTokenExchange"]
 }'
 ```
 
-On Windows PowerShell, if JSON quoting fails, write each body to a temp `.json` file and pass `@file.json`.
+If PowerShell mangles JSON, write each body to a `.json` file and use `@file.json`.
 
 ---
 
-## 3. GitHub Secrets (both repos)
+## 3. GitHub **Variables only** (no Azure Secrets)
 
-Settings → Secrets and variables → Actions → **Secrets**:
+Settings → Secrets and variables → Actions → **Variables** (not Secrets).
 
-| Name | Value |
-|------|-------|
-| `AZURE_CLIENT_ID` | App registration **Application (client) ID** |
+### Both repos (`aks-infr` and `sample-app`)
+
+| Variable | Value |
+|----------|-------|
+| `AZURE_CLIENT_ID` | App **Application (client) ID** |
 | `AZURE_TENANT_ID` | Directory (tenant) ID |
 | `AZURE_SUBSCRIPTION_ID` | Subscription GUID |
 
-Via CLI:
+These are identifiers. Workflows request an OIDC token; Entra exchanges it for a short-lived Azure token. Nothing reusable is stored on GitHub.
 
-```powershell
-gh secret set AZURE_CLIENT_ID -b "$CLIENT_ID" -R YOUR_ORG/aks-infra
-gh secret set AZURE_TENANT_ID -b "$TENANT_ID" -R YOUR_ORG/aks-infra
-gh secret set AZURE_SUBSCRIPTION_ID -b "$SUBSCRIPTION_ID" -R YOUR_ORG/aks-infra
-
-gh secret set AZURE_CLIENT_ID -b "$CLIENT_ID" -R YOUR_ORG/sample-app
-gh secret set AZURE_TENANT_ID -b "$TENANT_ID" -R YOUR_ORG/sample-app
-gh secret set AZURE_SUBSCRIPTION_ID -b "$SUBSCRIPTION_ID" -R YOUR_ORG/sample-app
-```
-
----
-
-## 4. GitHub Variables
-
-### `aks-infra` (from `bootstrap-state` output)
+### `aks-infr` only (from bootstrap-state)
 
 | Variable | Example |
 |----------|---------|
 | `TF_STATE_RESOURCE_GROUP` | `rg-tfstate` |
-| `TF_STATE_STORAGE_ACCOUNT` | `sttfstatea1b2c3d4` |
+| `TF_STATE_STORAGE_ACCOUNT` | `sttfstate1akc4957` |
 | `TF_STATE_CONTAINER` | `tfstate` |
 | `TF_STATE_KEY` | `aks-infra.tfstate` |
 | `TF_VAR_location` | `southindia` (optional) |
 | `TF_VAR_resource_group_name` | `aks-sutramind-rg` (optional) |
 | `TF_VAR_cluster_name` | `aks-sutramind` (optional) |
-| `TF_VAR_node_count` | `2` (optional) |
-| `TF_VAR_node_vm_size` | `Standard_D2s_v3` (optional) |
+| `TF_VAR_node_count` | `1` (optional) |
+| `TF_VAR_node_vm_size` | `Standard_B2s` (optional) |
 
-```powershell
-gh variable set TF_STATE_RESOURCE_GROUP -b "rg-tfstate" -R YOUR_ORG/aks-infra
-# …repeat for other TF_STATE_* and optional TF_VAR_*
-```
-
-### `sample-app` (from `terraform output` after infra apply)
+### `sample-app` only (after Terraform apply)
 
 | Variable | Source |
 |----------|--------|
 | `ACR_NAME` | `terraform output -raw acr_name` |
 | `AKS_RESOURCE_GROUP` | `terraform output -raw resource_group_name` |
 | `AKS_CLUSTER_NAME` | `terraform output -raw cluster_name` |
-| `IMAGE_NAME` | `sample-app` (optional) |
+
+If you already added `AZURE_*` under **Secrets**, delete those secret entries and recreate them as **Variables** so nothing credential-like sits in the secrets store.
 
 ---
 
-## 5. Workflow permissions
-
-Both workflows already set:
+## 4. Workflow permissions
 
 ```yaml
 permissions:
-  id-token: write   # required for OIDC
+  id-token: write   # required for OIDC token
   contents: read
 ```
 
-Do not disable “Allow GitHub Actions to create and approve pull requests” if you want plan comments; the infra workflow also uses `pull-requests: write`.
+Workflows use `azure/login@v2` with `client-id` / `tenant-id` / `subscription-id` from **vars** — never `creds:` / `AZURE_CREDENTIALS`.
 
 ---
 
-## 6. Common errors
+## 5. Common errors
 
 | Error | Fix |
 |-------|-----|
-| `AADSTS700016` / federated credential not found | Subject must match exactly (`repo:org/name:ref:refs/heads/main`) |
+| `AADSTS700016` / federated credential not found | Subject must match exactly (`repo:sunilkrdeep/aks-infr:ref:refs/heads/main`) |
 | `AuthorizationFailed` on state | Add **Storage Blob Data Contributor** on `rg-tfstate` |
-| `subscription_id must be specified` | Ensure `AZURE_SUBSCRIPTION_ID` secret is set (maps to `TF_VAR_subscription_id`) |
-| ACR push denied | Wait until aks-infra apply finishes; confirm `ACR_NAME` variable |
-| AKS pull ImagePullBackOff | Confirm `AcrPull` role on kubelet (created by Terraform `acr.tf`) |
+| `subscription_id must be specified` | Set Variable `AZURE_SUBSCRIPTION_ID` |
+| Login looks for a secret | You may still have old workflow expecting Secrets — pull latest workflows that use `vars.*` |
+| ACR push denied | Finish aks-infr apply; set `ACR_NAME` on sample-app |
