@@ -48,9 +48,9 @@ jobs:
           SEC_TENANT: ${{ secrets.AZURE_TENANT_ID }}
           SEC_SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
-          CLIENT_ID="${VAR_CLIENT:-$SEC_CLIENT}"
-          TENANT_ID="${VAR_TENANT:-$SEC_TENANT}"
-          SUBSCRIPTION_ID="${VAR_SUB:-$SEC_SUB}"
+          CLIENT_ID="$(echo "${VAR_CLIENT:-$SEC_CLIENT}" | tr -d '[:space:]')"
+          TENANT_ID="$(echo "${VAR_TENANT:-$SEC_TENANT}" | tr -d '[:space:]')"
+          SUBSCRIPTION_ID="$(echo "${VAR_SUB:-$SEC_SUB}" | tr -d '[:space:]')"
           if [ -z "$CLIENT_ID" ] || [ -z "$TENANT_ID" ] || [ -z "$SUBSCRIPTION_ID" ]; then
             echo "::error::Missing AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID."
             echo "::error::Add them under Settings → Secrets and variables → Actions → Variables (preferred) or Secrets."
@@ -90,10 +90,11 @@ jobs:
 
       - name: Terraform Init
         run: |
-          STATE_RG="${{ vars.TF_STATE_RESOURCE_GROUP }}"
-          STATE_SA="${{ vars.TF_STATE_STORAGE_ACCOUNT }}"
-          STATE_CONTAINER="${{ vars.TF_STATE_CONTAINER }}"
-          STATE_KEY="${{ vars.TF_STATE_KEY }}"
+          set -o pipefail
+          STATE_RG="$(echo "${{ vars.TF_STATE_RESOURCE_GROUP }}" | tr -d '[:space:]')"
+          STATE_SA="$(echo "${{ vars.TF_STATE_STORAGE_ACCOUNT }}" | tr -d '[:space:]')"
+          STATE_CONTAINER="$(echo "${{ vars.TF_STATE_CONTAINER }}" | tr -d '[:space:]')"
+          STATE_KEY="$(echo "${{ vars.TF_STATE_KEY }}" | tr -d '[:space:]')"
 
           # Fall back to bootstrap defaults if repo variables are not yet configured
           STATE_RG="${STATE_RG:-rg-tfstate}"
@@ -116,11 +117,7 @@ jobs:
           echo "Generated backend.hcl:"
           cat backend.hcl
 
-          if ! terraform init -input=false -reconfigure -backend-config=backend.hcl 2>&1 | tee /tmp/init.log; then
-            INIT_ERR=$(cat /tmp/init.log | tr '\r\n' ' ' | head -c 3000)
-            echo "::error title=Terraform Init Failed::$INIT_ERR"
-            exit 1
-          fi
+          terraform init -input=false -reconfigure -backend-config=backend.hcl 2>&1 | tee /tmp/init.log
 
       - name: Terraform Validate
         run: |
