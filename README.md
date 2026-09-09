@@ -5,6 +5,7 @@
 Companion app repo: **`sample-app`** (build image → push ACR → deploy to AKS).
 
 **New to Terraform?** Read [docs/TERRAFORM-GUIDE.md](docs/TERRAFORM-GUIDE.md).  
+**Enterprise CI/CD & Branching Guide:** [docs/CICD_PIPELINE_DOCUMENTATION.md](docs/CICD_PIPELINE_DOCUMENTATION.md)  
 **GitHub + OIDC setup:** [docs/GITHUB-OIDC.md](docs/GITHUB-OIDC.md)  
 **Create repos and first push:** [docs/GITHUB-BOOTSTRAP.md](docs/GITHUB-BOOTSTRAP.md)
 
