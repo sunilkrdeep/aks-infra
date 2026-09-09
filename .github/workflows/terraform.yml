@@ -143,8 +143,15 @@ jobs:
           if [ -n "${{ vars.TF_VAR_node_count }}" ]; then
             EXTRA_VARS+=(-var="node_count=${{ vars.TF_VAR_node_count }}")
           fi
-          if [ -n "${{ vars.TF_VAR_node_vm_size }}" ]; then
-            EXTRA_VARS+=(-var="node_vm_size=${{ vars.TF_VAR_node_vm_size }}")
+          NODE_VM_SIZE="${{ vars.TF_VAR_node_vm_size }}"
+          NODE_VM_SIZE="$(echo "$NODE_VM_SIZE" | tr -d '[:space:]')"
+          # Map legacy Standard_B2s (not available for AKS in southindia) to Standard_B2s_v2
+          if [ "$NODE_VM_SIZE" = "Standard_B2s" ]; then
+            echo "Notice: Mapping Standard_B2s to Standard_B2s_v2 (supported in southindia)"
+            NODE_VM_SIZE="Standard_B2s_v2"
+          fi
+          if [ -n "$NODE_VM_SIZE" ]; then
+            EXTRA_VARS+=(-var="node_vm_size=$NODE_VM_SIZE")
           fi
           if [ -n "${{ vars.TF_VAR_os_disk_size_gb }}" ]; then
             EXTRA_VARS+=(-var="os_disk_size_gb=${{ vars.TF_VAR_os_disk_size_gb }}")
@@ -156,36 +163,6 @@ jobs:
             exit 1
           fi
           terraform show -no-color tfplan > tfplan.txt
-
-      - name: Upload plan debug log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: plan-failure-log
-          path: /tmp/plan.log
-
-      - name: Post failure log to commit comment
-        if: failure()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            let body = '### Diagnostic Log\n';
-            if (fs.existsSync('/tmp/init.log')) {
-              body += '#### Init Log\n```text\n' + fs.readFileSync('/tmp/init.log', 'utf8').substring(0, 10000) + '\n```\n';
-            }
-            if (fs.existsSync('/tmp/validate.log')) {
-              body += '#### Validate Log\n```text\n' + fs.readFileSync('/tmp/validate.log', 'utf8').substring(0, 5000) + '\n```\n';
-            }
-            if (fs.existsSync('/tmp/plan.log')) {
-              body += '#### Plan Log\n```text\n' + fs.readFileSync('/tmp/plan.log', 'utf8').substring(0, 20000) + '\n```\n';
-            }
-            await github.rest.repos.createCommitComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              commit_sha: context.sha,
-              body
-            });
 
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
@@ -216,7 +193,9 @@ jobs:
 
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        run: terraform apply -input=false -auto-approve tfplan
+        run: |
+          set -o pipefail
+          terraform apply -input=false -auto-approve tfplan 2>&1 | tee /tmp/apply.log
 
       - name: Print useful outputs
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
@@ -226,3 +205,29 @@ jobs:
           echo "AKS_RESOURCE_GROUP=$(terraform output -raw resource_group_name)"
           echo "AKS_CLUSTER_NAME=$(terraform output -raw cluster_name)"
           echo "ACR_LOGIN_SERVER=$(terraform output -raw acr_login_server)"
+
+      - name: Post failure log to commit comment
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = '### Diagnostic Log\n';
+            if (fs.existsSync('/tmp/init.log')) {
+              body += '#### Init Log\n```text\n' + fs.readFileSync('/tmp/init.log', 'utf8').substring(0, 10000) + '\n```\n';
+            }
+            if (fs.existsSync('/tmp/validate.log')) {
+              body += '#### Validate Log\n```text\n' + fs.readFileSync('/tmp/validate.log', 'utf8').substring(0, 5000) + '\n```\n';
+            }
+            if (fs.existsSync('/tmp/plan.log')) {
+              body += '#### Plan Log\n```text\n' + fs.readFileSync('/tmp/plan.log', 'utf8').substring(0, 20000) + '\n```\n';
+            }
+            if (fs.existsSync('/tmp/apply.log')) {
+              body += '#### Apply Log\n```text\n' + fs.readFileSync('/tmp/apply.log', 'utf8').substring(0, 30000) + '\n```\n';
+            }
+            await github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+              body
+            });
