@@ -17,6 +17,7 @@
 # -----------------------------------------------------------------------------
 
 resource "azurerm_kubernetes_cluster" "aks" {
+  count               = var.enable_cluster ? 1 : 0
   name                = var.cluster_name
   location            = azurerm_resource_group.aks.location
   resource_group_name = azurerm_resource_group.aks.name
@@ -73,7 +74,8 @@ resource "azurerm_kubernetes_cluster" "aks" {
 # The cluster identity needs permission to attach NICs in the AKS subnet
 # (required when you bring your own VNet).
 resource "azurerm_role_assignment" "aks_network" {
+  count                = var.enable_cluster ? 1 : 0
   scope                = azurerm_virtual_network.aks.id
   role_definition_name = "Network Contributor"
-  principal_id         = azurerm_kubernetes_cluster.aks.identity[0].principal_id
+  principal_id         = azurerm_kubernetes_cluster.aks[0].identity[0].principal_id
 }

@@ -13,37 +13,37 @@ output "resource_group_name" {
 
 output "cluster_name" {
   description = "AKS cluster name"
-  value       = azurerm_kubernetes_cluster.aks.name
+  value       = try(azurerm_kubernetes_cluster.aks[0].name, null)
 }
 
 output "cluster_fqdn" {
   description = "Public FQDN of the Kubernetes API server (the managed control plane)"
-  value       = azurerm_kubernetes_cluster.aks.fqdn
+  value       = try(azurerm_kubernetes_cluster.aks[0].fqdn, null)
 }
 
 output "kubernetes_version" {
   description = "Kubernetes version running on the control plane"
-  value       = azurerm_kubernetes_cluster.aks.kubernetes_version
+  value       = try(azurerm_kubernetes_cluster.aks[0].kubernetes_version, null)
 }
 
 output "node_resource_group" {
   description = "Azure-managed RG that holds the 2 worker VMs, NICs, disks, and load balancer (do not edit by hand)"
-  value       = azurerm_kubernetes_cluster.aks.node_resource_group
+  value       = try(azurerm_kubernetes_cluster.aks[0].node_resource_group, null)
 }
 
 output "get_credentials_command" {
   description = "Merge AKS credentials into your local kubeconfig"
-  value       = "az aks get-credentials --resource-group ${azurerm_resource_group.aks.name} --name ${azurerm_kubernetes_cluster.aks.name} --overwrite-existing"
+  value       = var.enable_cluster ? "az aks get-credentials --resource-group ${azurerm_resource_group.aks.name} --name ${azurerm_kubernetes_cluster.aks[0].name} --overwrite-existing" : "N/A (Cluster Destroyed)"
 }
 
 output "verify_nodes_command" {
   description = "List the 2 worker nodes after credentials are downloaded"
-  value       = "kubectl get nodes -o wide"
+  value       = var.enable_cluster ? "kubectl get nodes -o wide" : "N/A (Cluster Destroyed)"
 }
 
 output "kube_config" {
   description = "Raw kubeconfig (sensitive). Prefer az aks get-credentials instead."
-  value       = azurerm_kubernetes_cluster.aks.kube_config_raw
+  value       = try(azurerm_kubernetes_cluster.aks[0].kube_config_raw, null)
   sensitive   = true
 }
 

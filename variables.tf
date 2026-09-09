@@ -5,6 +5,12 @@
 #   terraform apply -var="node_count=3"
 # -----------------------------------------------------------------------------
 
+variable "enable_cluster" {
+  description = "Set to true to deploy the AKS cluster, or false to destroy the cluster while keeping supporting resources (e.g. VNet, ACR)."
+  type        = bool
+  default     = true
+}
+
 variable "subscription_id" {
   description = "Azure subscription ID that will own the AKS resources. Find it with: az account show --query id -o tsv"
   type        = string

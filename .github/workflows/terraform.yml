@@ -183,12 +183,12 @@ jobs:
   # STAGE 2: APPLY / DESTROY (With Review Approval Gate)
   # ============================================================================
   apply:
-    name: Terraform Apply / Destroy (Approval Gate)
+    name: Terraform Apply (Approval Gate)
     needs: [plan]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    # The 'production' environment enforces the manual approval gate in GitHub Settings
-    environment: production
+    # The 'terraform-approval' environment enforces the manual approval gate in GitHub Settings
+    environment: terraform-approval
     defaults:
       run:
         working-directory: .
