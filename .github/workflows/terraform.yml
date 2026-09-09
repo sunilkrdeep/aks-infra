@@ -154,11 +154,18 @@ jobs:
           fi
 
           if ! "${PLAN_CMD[@]}" 2>&1 | tee /tmp/plan.log; then
-            PLAN_ERR=$(cat /tmp/plan.log | tr '\r\n' ' ' | head -c 3000)
-            echo "::error title=Terraform Plan Failed::$PLAN_ERR"
+            PLAN_ERR=$(cat /tmp/plan.log | tr '\r\n' ' ' | sed 's/::/ - /g' | head -c 1000)
+            echo "::error::$PLAN_ERR"
             exit 1
           fi
           terraform show -no-color tfplan > tfplan.txt
+
+      - name: Upload plan debug log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-failure-log
+          path: /tmp/plan.log
 
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
