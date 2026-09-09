@@ -101,17 +101,17 @@ jobs:
           STATE_CONTAINER="${STATE_CONTAINER:-tfstate}"
           STATE_KEY="${STATE_KEY:-aks-infra.tfstate}"
 
-          cat <<EOF > backend.hcl
-resource_group_name  = "$STATE_RG"
-storage_account_name = "$STATE_SA"
-container_name       = "$STATE_CONTAINER"
-key                  = "$STATE_KEY"
-use_azuread_auth     = true
-use_oidc             = true
-subscription_id      = "${{ steps.azure.outputs.subscription_id }}"
-tenant_id            = "${{ steps.azure.outputs.tenant_id }}"
-client_id            = "${{ steps.azure.outputs.client_id }}"
-EOF
+          {
+            echo "resource_group_name  = \"$STATE_RG\""
+            echo "storage_account_name = \"$STATE_SA\""
+            echo "container_name       = \"$STATE_CONTAINER\""
+            echo "key                  = \"$STATE_KEY\""
+            echo "use_azuread_auth     = true"
+            echo "use_oidc             = true"
+            echo "subscription_id      = \"${{ steps.azure.outputs.subscription_id }}\""
+            echo "tenant_id            = \"${{ steps.azure.outputs.tenant_id }}\""
+            echo "client_id            = \"${{ steps.azure.outputs.client_id }}\""
+          } > backend.hcl
 
           echo "Generated backend.hcl:"
           cat backend.hcl
