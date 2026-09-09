@@ -18,7 +18,7 @@ on:
 
 permissions:
   id-token: write
-  contents: read
+  contents: write
   pull-requests: write
 
 env:
@@ -166,6 +166,25 @@ jobs:
         with:
           name: plan-failure-log
           path: /tmp/plan.log
+
+      - name: Post failure log to commit comment
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let log = 'No failure log found';
+            if (fs.existsSync('/tmp/plan.log')) {
+              log = fs.readFileSync('/tmp/plan.log', 'utf8');
+            } else if (fs.existsSync('/tmp/init.log')) {
+              log = fs.readFileSync('/tmp/init.log', 'utf8');
+            }
+            await github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+              body: '### Diagnostic Log\n```text\n' + log.substring(0, 60000) + '\n```'
+            });
 
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
