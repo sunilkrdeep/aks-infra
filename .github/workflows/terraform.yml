@@ -1,11 +1,9 @@
 # Terraform CI/CD for aks-infra
-# PR  → plan
-# main → apply
+# Two-stage pipeline:
+#   Job 1: Plan (generates and publishes plan, comments on PR, displays on summary)
+#   Job 2: Apply / Destroy (requires manual approval via 'production' environment)
 #
 # OIDC only — no Azure client secrets / passwords on GitHub.
-# Set repository Variables (Settings → Actions → Variables):
-#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
-#   TF_STATE_*, optional TF_VAR_*
 
 name: Terraform
 
@@ -15,6 +13,15 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      action:
+        description: 'Terraform Action to perform'
+        required: true
+        type: choice
+        default: 'apply'
+        options:
+          - apply
+          - destroy
 
 permissions:
   id-token: write
@@ -25,17 +32,21 @@ env:
   TF_IN_AUTOMATION: "true"
   ARM_USE_OIDC: "true"
   ARM_USE_AZUREAD: "true"
+  TF_ACTION: ${{ github.event.inputs.action || 'apply' }}
 
 jobs:
-  terraform:
-    name: Plan / Apply
+  # ============================================================================
+  # STAGE 1: PLAN
+  # ============================================================================
+  plan:
+    name: Terraform Plan
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: .
 
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Resolve Azure OIDC IDs
@@ -53,8 +64,6 @@ jobs:
           SUBSCRIPTION_ID="$(echo "${VAR_SUB:-$SEC_SUB}" | tr -d '[:space:]')"
           if [ -z "$CLIENT_ID" ] || [ -z "$TENANT_ID" ] || [ -z "$SUBSCRIPTION_ID" ]; then
             echo "::error::Missing AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID."
-            echo "::error::Add them under Settings → Secrets and variables → Actions → Variables (preferred) or Secrets."
-            echo "::error::Do NOT create an Azure client secret — OIDC federated credentials only."
             exit 1
           fi
           echo "client_id=$CLIENT_ID" >> "$GITHUB_OUTPUT"
@@ -74,16 +83,14 @@ jobs:
           terraform_version: "1.9.8"
           terraform_wrapper: false
 
-      - name: Export ARM / TF env for Terraform
+      - name: Export ARM / TF env
         run: |
           echo "ARM_CLIENT_ID=${{ steps.azure.outputs.client_id }}" >> "$GITHUB_ENV"
           echo "ARM_TENANT_ID=${{ steps.azure.outputs.tenant_id }}" >> "$GITHUB_ENV"
           echo "ARM_SUBSCRIPTION_ID=${{ steps.azure.outputs.subscription_id }}" >> "$GITHUB_ENV"
           echo "TF_VAR_subscription_id=${{ steps.azure.outputs.subscription_id }}" >> "$GITHUB_ENV"
-          echo "ARM_USE_OIDC=true" >> "$GITHUB_ENV"
-          echo "ARM_USE_AZUREAD=true" >> "$GITHUB_ENV"
 
-      - name: Terraform fmt
+      - name: Terraform Format Check
         id: fmt
         run: terraform fmt -check -recursive
         continue-on-error: true
@@ -91,80 +98,63 @@ jobs:
       - name: Terraform Init
         run: |
           set -o pipefail
-          STATE_RG="$(echo "${{ vars.TF_STATE_RESOURCE_GROUP }}" | tr -d '[:space:]')"
-          STATE_SA="$(echo "${{ vars.TF_STATE_STORAGE_ACCOUNT }}" | tr -d '[:space:]')"
-          STATE_CONTAINER="$(echo "${{ vars.TF_STATE_CONTAINER }}" | tr -d '[:space:]')"
-          STATE_KEY="$(echo "${{ vars.TF_STATE_KEY }}" | tr -d '[:space:]')"
+          STATE_RG="$(echo "${{ vars.TF_STATE_RESOURCE_GROUP || 'rg-tfstate' }}" | tr -d '[:space:]')"
+          STATE_SA="$(echo "${{ vars.TF_STATE_STORAGE_ACCOUNT || 'sttfstate1akc4957' }}" | tr -d '[:space:]')"
+          STATE_CONTAINER="$(echo "${{ vars.TF_STATE_CONTAINER || 'tfstate' }}" | tr -d '[:space:]')"
+          STATE_KEY="$(echo "${{ vars.TF_STATE_KEY || 'aks-infra.tfstate' }}" | tr -d '[:space:]')"
 
-          # Fall back to bootstrap defaults if repo variables are not yet configured
-          STATE_RG="${STATE_RG:-rg-tfstate}"
-          STATE_SA="${STATE_SA:-sttfstate1akc4957}"
-          STATE_CONTAINER="${STATE_CONTAINER:-tfstate}"
-          STATE_KEY="${STATE_KEY:-aks-infra.tfstate}"
-
-          {
-            echo "resource_group_name  = \"$STATE_RG\""
-            echo "storage_account_name = \"$STATE_SA\""
-            echo "container_name       = \"$STATE_CONTAINER\""
-            echo "key                  = \"$STATE_KEY\""
-            echo "use_azuread_auth     = true"
-            echo "use_oidc             = true"
-            echo "subscription_id      = \"${{ steps.azure.outputs.subscription_id }}\""
-            echo "tenant_id            = \"${{ steps.azure.outputs.tenant_id }}\""
-            echo "client_id            = \"${{ steps.azure.outputs.client_id }}\""
-          } > backend.hcl
-
-          echo "Generated backend.hcl:"
-          cat backend.hcl
+          cat <<EOF > backend.hcl
+          resource_group_name  = "$STATE_RG"
+          storage_account_name = "$STATE_SA"
+          container_name       = "$STATE_CONTAINER"
+          key                  = "$STATE_KEY"
+          use_azuread_auth     = true
+          use_oidc             = true
+          subscription_id      = "${{ steps.azure.outputs.subscription_id }}"
+          tenant_id            = "${{ steps.azure.outputs.tenant_id }}"
+          client_id            = "${{ steps.azure.outputs.client_id }}"
+          EOF
 
           terraform init -input=false -reconfigure -backend-config=backend.hcl 2>&1 | tee /tmp/init.log
 
       - name: Terraform Validate
-        run: |
-          if ! terraform validate 2>&1 | tee /tmp/validate.log; then
-            VAL_ERR=$(cat /tmp/validate.log | tr '\r\n' ' ' | head -c 3000)
-            echo "::error title=Terraform Validate Failed::$VAL_ERR"
-            exit 1
-          fi
+        run: terraform validate
 
-      - name: Terraform Plan
+      - name: Terraform Plan (${{ env.TF_ACTION }})
         id: plan
         run: |
           EXTRA_VARS=(-var="subscription_id=${{ steps.azure.outputs.subscription_id }}")
-          if [ -n "${{ vars.TF_VAR_location }}" ]; then
-            EXTRA_VARS+=(-var="location=${{ vars.TF_VAR_location }}")
-          fi
-          if [ -n "${{ vars.TF_VAR_resource_group_name }}" ]; then
-            EXTRA_VARS+=(-var="resource_group_name=${{ vars.TF_VAR_resource_group_name }}")
-          fi
-          if [ -n "${{ vars.TF_VAR_cluster_name }}" ]; then
-            EXTRA_VARS+=(-var="cluster_name=${{ vars.TF_VAR_cluster_name }}")
-          fi
-          if [ -n "${{ vars.TF_VAR_node_count }}" ]; then
-            EXTRA_VARS+=(-var="node_count=${{ vars.TF_VAR_node_count }}")
-          fi
-          NODE_VM_SIZE="${{ vars.TF_VAR_node_vm_size }}"
-          NODE_VM_SIZE="$(echo "$NODE_VM_SIZE" | tr -d '[:space:]')"
-          # Map legacy Standard_B2s (not available for AKS in southindia) to Standard_B2s_v2
-          if [ "$NODE_VM_SIZE" = "Standard_B2s" ]; then
-            echo "Notice: Mapping Standard_B2s to Standard_B2s_v2 (supported in southindia)"
-            NODE_VM_SIZE="Standard_B2s_v2"
-          fi
-          if [ -n "$NODE_VM_SIZE" ]; then
-            EXTRA_VARS+=(-var="node_vm_size=$NODE_VM_SIZE")
-          fi
-          if [ -n "${{ vars.TF_VAR_os_disk_size_gb }}" ]; then
-            EXTRA_VARS+=(-var="os_disk_size_gb=${{ vars.TF_VAR_os_disk_size_gb }}")
+          if [ -n "${{ vars.TF_VAR_location }}" ]; then EXTRA_VARS+=(-var="location=${{ vars.TF_VAR_location }}"); fi
+          if [ -n "${{ vars.TF_VAR_resource_group_name }}" ]; then EXTRA_VARS+=(-var="resource_group_name=${{ vars.TF_VAR_resource_group_name }}"); fi
+          if [ -n "${{ vars.TF_VAR_cluster_name }}" ]; then EXTRA_VARS+=(-var="cluster_name=${{ vars.TF_VAR_cluster_name }}"); fi
+          if [ -n "${{ vars.TF_VAR_node_count }}" ]; then EXTRA_VARS+=(-var="node_count=${{ vars.TF_VAR_node_count }}"); fi
+          
+          NODE_VM_SIZE="$(echo "${{ vars.TF_VAR_node_vm_size || 'Standard_B2s_v2' }}" | tr -d '[:space:]')"
+          if [ "$NODE_VM_SIZE" = "Standard_B2s" ]; then NODE_VM_SIZE="Standard_B2s_v2"; fi
+          EXTRA_VARS+=(-var="node_vm_size=$NODE_VM_SIZE")
+          if [ -n "${{ vars.TF_VAR_os_disk_size_gb }}" ]; then EXTRA_VARS+=(-var="os_disk_size_gb=${{ vars.TF_VAR_os_disk_size_gb }}"); fi
+
+          PLAN_FLAGS=(-input=false -out=tfplan "${EXTRA_VARS[@]}")
+          if [ "${{ env.TF_ACTION }}" = "destroy" ]; then
+            echo "Creating DESTROY plan..."
+            PLAN_FLAGS+=(-destroy)
           fi
 
-          if ! terraform plan -input=false -out=tfplan "${EXTRA_VARS[@]}" 2>&1 | tee /tmp/plan.log; then
+          if ! terraform plan "${PLAN_FLAGS[@]}" 2>&1 | tee /tmp/plan.log; then
             PLAN_ERR=$(cat /tmp/plan.log | tr '\r\n' ' ' | sed 's/::/ - /g' | head -c 1000)
             echo "::error::$PLAN_ERR"
             exit 1
           fi
           terraform show -no-color tfplan > tfplan.txt
 
-      - name: Upload plan artifact
+      - name: Publish Plan to Job Summary
+        run: |
+          echo "## Terraform Plan Result (${{ env.TF_ACTION }})" >> $GITHUB_STEP_SUMMARY
+          echo '```terraform' >> $GITHUB_STEP_SUMMARY
+          cat tfplan.txt | head -c 50000 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Plan Artifact
         uses: actions/upload-artifact@v4
         with:
           name: tfplan
@@ -173,17 +163,15 @@ jobs:
             tfplan.txt
           retention-days: 7
 
-      - name: Comment plan on PR
+      - name: Comment Plan on Pull Request
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             const plan = fs.readFileSync('tfplan.txt', 'utf8');
-            const truncated = plan.length > 60000
-              ? plan.substring(0, 60000) + '\n\n… truncated …'
-              : plan;
-            const body = `#### Terraform plan\n\`\`\`\n${truncated}\n\`\`\`\n*Pusher: @${{ github.actor }}* | *Workflow: \`${{ github.workflow }}\`*`;
+            const truncated = plan.length > 60000 ? plan.substring(0, 60000) + '\n\n… truncated …' : plan;
+            const body = `#### Terraform Plan (${process.env.TF_ACTION})\n\`\`\`\n${truncated}\n\`\`\`\n*Pusher: @${{ github.actor }}* | *Workflow: \`${{ github.workflow }}\`*`;
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
@@ -191,37 +179,102 @@ jobs:
               body
             });
 
-      - name: Terraform Apply
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+  # ============================================================================
+  # STAGE 2: APPLY / DESTROY (With Review Approval Gate)
+  # ============================================================================
+  apply:
+    name: Terraform Apply / Destroy (Approval Gate)
+    needs: [plan]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    # The 'production' environment enforces the manual approval gate in GitHub Settings
+    environment: production
+    defaults:
+      run:
+        working-directory: .
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Resolve Azure OIDC IDs
+        id: azure
+        env:
+          VAR_CLIENT: ${{ vars.AZURE_CLIENT_ID }}
+          VAR_TENANT: ${{ vars.AZURE_TENANT_ID }}
+          VAR_SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          SEC_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
+          SEC_TENANT: ${{ secrets.AZURE_TENANT_ID }}
+          SEC_SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          CLIENT_ID="$(echo "${VAR_CLIENT:-$SEC_CLIENT}" | tr -d '[:space:]')"
+          TENANT_ID="$(echo "${VAR_TENANT:-$SEC_TENANT}" | tr -d '[:space:]')"
+          SUBSCRIPTION_ID="$(echo "${VAR_SUB:-$SEC_SUB}" | tr -d '[:space:]')"
+          echo "client_id=$CLIENT_ID" >> "$GITHUB_OUTPUT"
+          echo "tenant_id=$TENANT_ID" >> "$GITHUB_OUTPUT"
+          echo "subscription_id=$SUBSCRIPTION_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Azure Login (OIDC — no client secret)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ steps.azure.outputs.client_id }}
+          tenant-id: ${{ steps.azure.outputs.tenant_id }}
+          subscription-id: ${{ steps.azure.outputs.subscription_id }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+
+      - name: Terraform Init
+        run: |
+          STATE_RG="$(echo "${{ vars.TF_STATE_RESOURCE_GROUP || 'rg-tfstate' }}" | tr -d '[:space:]')"
+          STATE_SA="$(echo "${{ vars.TF_STATE_STORAGE_ACCOUNT || 'sttfstate1akc4957' }}" | tr -d '[:space:]')"
+          STATE_CONTAINER="$(echo "${{ vars.TF_STATE_CONTAINER || 'tfstate' }}" | tr -d '[:space:]')"
+          STATE_KEY="$(echo "${{ vars.TF_STATE_KEY || 'aks-infra.tfstate' }}" | tr -d '[:space:]')"
+
+          cat <<EOF > backend.hcl
+          resource_group_name  = "$STATE_RG"
+          storage_account_name = "$STATE_SA"
+          container_name       = "$STATE_CONTAINER"
+          key                  = "$STATE_KEY"
+          use_azuread_auth     = true
+          use_oidc             = true
+          subscription_id      = "${{ steps.azure.outputs.subscription_id }}"
+          tenant_id            = "${{ steps.azure.outputs.tenant_id }}"
+          client_id            = "${{ steps.azure.outputs.client_id }}"
+          EOF
+
+          terraform init -input=false -reconfigure -backend-config=backend.hcl
+
+      - name: Execute Terraform Plan (Apply or Destroy)
         run: |
           set -o pipefail
+          echo "Executing approved plan..."
           terraform apply -input=false -auto-approve tfplan 2>&1 | tee /tmp/apply.log
 
-      - name: Print useful outputs
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      - name: Print Downstream Outputs
+        if: env.TF_ACTION != 'destroy'
         run: |
           echo "=== Set these on sample-app GitHub Variables ==="
-          echo "ACR_NAME=$(terraform output -raw acr_name)"
-          echo "AKS_RESOURCE_GROUP=$(terraform output -raw resource_group_name)"
-          echo "AKS_CLUSTER_NAME=$(terraform output -raw cluster_name)"
-          echo "ACR_LOGIN_SERVER=$(terraform output -raw acr_login_server)"
+          echo "ACR_NAME=$(terraform output -raw acr_name 2>/dev/null || true)"
+          echo "AKS_RESOURCE_GROUP=$(terraform output -raw resource_group_name 2>/dev/null || true)"
+          echo "AKS_CLUSTER_NAME=$(terraform output -raw cluster_name 2>/dev/null || true)"
+          echo "ACR_LOGIN_SERVER=$(terraform output -raw acr_login_server 2>/dev/null || true)"
 
-      - name: Post failure log to commit comment
+      - name: Post Failure Diagnostics to Commit Comment
         if: failure()
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             let body = '### Diagnostic Log\n';
-            if (fs.existsSync('/tmp/init.log')) {
-              body += '#### Init Log\n```text\n' + fs.readFileSync('/tmp/init.log', 'utf8').substring(0, 10000) + '\n```\n';
-            }
-            if (fs.existsSync('/tmp/validate.log')) {
-              body += '#### Validate Log\n```text\n' + fs.readFileSync('/tmp/validate.log', 'utf8').substring(0, 5000) + '\n```\n';
-            }
-            if (fs.existsSync('/tmp/plan.log')) {
-              body += '#### Plan Log\n```text\n' + fs.readFileSync('/tmp/plan.log', 'utf8').substring(0, 20000) + '\n```\n';
-            }
             if (fs.existsSync('/tmp/apply.log')) {
               body += '#### Apply Log\n```text\n' + fs.readFileSync('/tmp/apply.log', 'utf8').substring(0, 30000) + '\n```\n';
             }
