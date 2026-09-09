@@ -101,17 +101,22 @@ jobs:
           STATE_CONTAINER="${STATE_CONTAINER:-tfstate}"
           STATE_KEY="${STATE_KEY:-aks-infra.tfstate}"
 
-          echo "Initializing Terraform backend with Storage Account: $STATE_SA, Container: $STATE_CONTAINER, Key: $STATE_KEY in RG: $STATE_RG"
-          if ! terraform init -input=false \
-            -backend-config="resource_group_name=$STATE_RG" \
-            -backend-config="storage_account_name=$STATE_SA" \
-            -backend-config="container_name=$STATE_CONTAINER" \
-            -backend-config="key=$STATE_KEY" \
-            -backend-config="use_azuread_auth=true" \
-            -backend-config="use_oidc=true" \
-            -backend-config="subscription_id=${{ steps.azure.outputs.subscription_id }}" \
-            -backend-config="tenant_id=${{ steps.azure.outputs.tenant_id }}" \
-            -backend-config="client_id=${{ steps.azure.outputs.client_id }}" 2>&1 | tee /tmp/init.log; then
+          cat <<EOF > backend.hcl
+resource_group_name  = "$STATE_RG"
+storage_account_name = "$STATE_SA"
+container_name       = "$STATE_CONTAINER"
+key                  = "$STATE_KEY"
+use_azuread_auth     = true
+use_oidc             = true
+subscription_id      = "${{ steps.azure.outputs.subscription_id }}"
+tenant_id            = "${{ steps.azure.outputs.tenant_id }}"
+client_id            = "${{ steps.azure.outputs.client_id }}"
+EOF
+
+          echo "Generated backend.hcl:"
+          cat backend.hcl
+
+          if ! terraform init -input=false -reconfigure -backend-config=backend.hcl 2>&1 | tee /tmp/init.log; then
             INIT_ERR=$(cat /tmp/init.log | tr '\r\n' ' ' | head -c 3000)
             echo "::error title=Terraform Init Failed::$INIT_ERR"
             exit 1
@@ -128,7 +133,7 @@ jobs:
       - name: Terraform Plan
         id: plan
         run: |
-          EXTRA_VARS=()
+          EXTRA_VARS=(-var="subscription_id=${{ steps.azure.outputs.subscription_id }}")
           if [ -n "${{ vars.TF_VAR_location }}" ]; then
             EXTRA_VARS+=(-var="location=${{ vars.TF_VAR_location }}")
           fi
@@ -147,13 +152,8 @@ jobs:
           if [ -n "${{ vars.TF_VAR_os_disk_size_gb }}" ]; then
             EXTRA_VARS+=(-var="os_disk_size_gb=${{ vars.TF_VAR_os_disk_size_gb }}")
           fi
-          if [ ${#EXTRA_VARS[@]} -gt 0 ]; then
-            PLAN_CMD=(terraform plan -input=false -out=tfplan "${EXTRA_VARS[@]}")
-          else
-            PLAN_CMD=(terraform plan -input=false -out=tfplan)
-          fi
 
-          if ! "${PLAN_CMD[@]}" 2>&1 | tee /tmp/plan.log; then
+          if ! terraform plan -input=false -out=tfplan "${EXTRA_VARS[@]}" 2>&1 | tee /tmp/plan.log; then
             PLAN_ERR=$(cat /tmp/plan.log | tr '\r\n' ' ' | sed 's/::/ - /g' | head -c 1000)
             echo "::error::$PLAN_ERR"
             exit 1
@@ -173,17 +173,21 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            let log = 'No failure log found';
+            let body = '### Diagnostic Log\n';
+            if (fs.existsSync('/tmp/init.log')) {
+              body += '#### Init Log\n```text\n' + fs.readFileSync('/tmp/init.log', 'utf8').substring(0, 10000) + '\n```\n';
+            }
+            if (fs.existsSync('/tmp/validate.log')) {
+              body += '#### Validate Log\n```text\n' + fs.readFileSync('/tmp/validate.log', 'utf8').substring(0, 5000) + '\n```\n';
+            }
             if (fs.existsSync('/tmp/plan.log')) {
-              log = fs.readFileSync('/tmp/plan.log', 'utf8');
-            } else if (fs.existsSync('/tmp/init.log')) {
-              log = fs.readFileSync('/tmp/init.log', 'utf8');
+              body += '#### Plan Log\n```text\n' + fs.readFileSync('/tmp/plan.log', 'utf8').substring(0, 20000) + '\n```\n';
             }
             await github.rest.repos.createCommitComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               commit_sha: context.sha,
-              body: '### Diagnostic Log\n```text\n' + log.substring(0, 60000) + '\n```'
+              body
             });
 
       - name: Upload plan artifact
