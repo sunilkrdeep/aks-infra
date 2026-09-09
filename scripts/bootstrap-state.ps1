@@ -65,8 +65,10 @@ Write-Host ""
 Write-Host "Wrote $backendPath" -ForegroundColor Green
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Yellow
-Write-Host "  1. terraform init -backend-config=backend.hcl"
-Write-Host "  2. Add these as GitHub Variables on aks-infra:"
+Write-Host "  1. Assign Storage Blob Data Owner on the storage account for your CI/CD Service Principal and user:"
+Write-Host "       az role assignment create --assignee <SP_CLIENT_ID> --role 'Storage Blob Data Owner' --scope (az storage account show -n $storageAccountName -g $ResourceGroupName --query id -o tsv)"
+Write-Host "  2. terraform init -backend-config=backend.hcl"
+Write-Host "  3. Add these as GitHub Variables on aks-infra:"
 Write-Host "       TF_STATE_RESOURCE_GROUP = $ResourceGroupName"
 Write-Host "       TF_STATE_STORAGE_ACCOUNT = $storageAccountName"
 Write-Host "       TF_STATE_CONTAINER = $ContainerName"
