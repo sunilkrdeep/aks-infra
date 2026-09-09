@@ -116,6 +116,9 @@ jobs:
           if [ -n "${{ vars.TF_VAR_node_vm_size }}" ]; then
             EXTRA_VARS+=(-var="node_vm_size=${{ vars.TF_VAR_node_vm_size }}")
           fi
+          if [ -n "${{ vars.TF_VAR_os_disk_size_gb }}" ]; then
+            EXTRA_VARS+=(-var="os_disk_size_gb=${{ vars.TF_VAR_os_disk_size_gb }}")
+          fi
           terraform plan -input=false -out=tfplan "${EXTRA_VARS[@]}"
           terraform show -no-color tfplan > tfplan.txt
 

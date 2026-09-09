@@ -67,12 +67,43 @@ az role assignment create `
 
 ## 2. Federated credentials (replaces passwords)
 
-Subjects must match your real repos (`sunilkrdeep` / `aks-infra`):
+GitHub Actions supports both the **immutable ID format** (default on newer repos) and the **classic format**.
+Because Azure Entra ID requires an **exact, case-sensitive match**, register both or ensure the immutable subject with numeric IDs is registered:
+
+- **Your GitHub User ID**: `15242155` (`sunilkrdeep`)
+- **aks-infra Repo ID**: `1362295953`
+- **sample-app Repo ID**: `1362298528`
 
 ```powershell
 $CLIENT_ID = "<appId>"
 $APP_OBJECT_ID = (az ad app show --id $CLIENT_ID --query id -o tsv)
 
+# --- 1. Immutable Format (Matches GitHub Actions Assertion) ---
+# aks-infra main branch
+az ad app federated-credential create --id $APP_OBJECT_ID --parameters '{
+  "name": "aks-infra-main-immutable",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:sunilkrdeep@15242155/aks-infra@1362295953:ref:refs/heads/main",
+  "audiences": ["api://AzureADTokenExchange"]
+}'
+
+# aks-infra pull requests (plan)
+az ad app federated-credential create --id $APP_OBJECT_ID --parameters '{
+  "name": "aks-infra-pr-immutable",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:sunilkrdeep@15242155/aks-infra@1362295953:pull_request",
+  "audiences": ["api://AzureADTokenExchange"]
+}'
+
+# sample-app main branch
+az ad app federated-credential create --id $APP_OBJECT_ID --parameters '{
+  "name": "sample-app-main-immutable",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "subject": "repo:sunilkrdeep@15242155/sample-app@1362298528:ref:refs/heads/main",
+  "audiences": ["api://AzureADTokenExchange"]
+}'
+
+# --- 2. Classic Format (Fallback / Standard) ---
 az ad app federated-credential create --id $APP_OBJECT_ID --parameters '{
   "name": "aks-infra-main",
   "issuer": "https://token.actions.githubusercontent.com",
@@ -126,6 +157,7 @@ These are identifiers. Workflows request an OIDC token; Entra exchanges it for a
 | `TF_VAR_cluster_name` | `aks-sutramind` (optional) |
 | `TF_VAR_node_count` | `1` (optional) |
 | `TF_VAR_node_vm_size` | `Standard_B2s` (optional) |
+| `TF_VAR_os_disk_size_gb` | `30` (optional) |
 
 ### `sample-app` only (after Terraform apply)
 
@@ -147,7 +179,7 @@ permissions:
   contents: read
 ```
 
-Workflows use `azure/login@v2` with `client-id` / `tenant-id` / `subscription-id` from **vars** — never `creds:` / `AZURE_CREDENTIALS`.
+Workflows use `azure/login@v3` with `client-id` / `tenant-id` / `subscription-id` from **vars** — never `creds:` / `AZURE_CREDENTIALS`.
 
 ---
 
@@ -155,8 +187,9 @@ Workflows use `azure/login@v2` with `client-id` / `tenant-id` / `subscription-id
 
 | Error | Fix |
 |-------|-----|
-| `AADSTS700016` / federated credential not found | Subject must match exactly (`repo:sunilkrdeep/aks-infra:ref:refs/heads/main`) |
-| `AuthorizationFailed` on state | Add **Storage Blob Data Contributor** on `rg-tfstate` |
-| `subscription_id must be specified` | Set Variable `AZURE_SUBSCRIPTION_ID` |
-| Login looks for a secret | You may still have old workflow expecting Secrets — pull latest workflows that use `vars.*` |
-| ACR push denied | Finish aks-infra apply; set `ACR_NAME` on sample-app |
+| `AADSTS700213` / No matching federated identity record | Subject must match the exact string presented in the error log (check whether GitHub presented immutable format `repo:owner@id/repo@id:...` vs classic format). |
+| `AADSTS700016` / federated credential not found | Ensure Azure App Registration has federated credentials configured under Certificates & secrets. |
+| `AuthorizationFailed` on state | Add **Storage Blob Data Contributor** on `rg-tfstate` to the Service Principal. |
+| `subscription_id must be specified` | Set Variable `AZURE_SUBSCRIPTION_ID` in GitHub repository Variables. |
+| Login looks for a secret | You may still have old workflow expecting Secrets — pull latest workflows that use `vars.*`. |
+| ACR push denied | Finish aks-infra apply; set `ACR_NAME` on sample-app. |
