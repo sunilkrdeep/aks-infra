@@ -24,6 +24,7 @@ permissions:
 env:
   TF_IN_AUTOMATION: "true"
   ARM_USE_OIDC: "true"
+  ARM_USE_AZUREAD: "true"
 
 jobs:
   terraform:
@@ -79,6 +80,8 @@ jobs:
           echo "ARM_TENANT_ID=${{ steps.azure.outputs.tenant_id }}" >> "$GITHUB_ENV"
           echo "ARM_SUBSCRIPTION_ID=${{ steps.azure.outputs.subscription_id }}" >> "$GITHUB_ENV"
           echo "TF_VAR_subscription_id=${{ steps.azure.outputs.subscription_id }}" >> "$GITHUB_ENV"
+          echo "ARM_USE_OIDC=true" >> "$GITHUB_ENV"
+          echo "ARM_USE_AZUREAD=true" >> "$GITHUB_ENV"
 
       - name: Terraform fmt
         id: fmt
@@ -87,12 +90,28 @@ jobs:
 
       - name: Terraform Init
         run: |
+          STATE_RG="${{ vars.TF_STATE_RESOURCE_GROUP }}"
+          STATE_SA="${{ vars.TF_STATE_STORAGE_ACCOUNT }}"
+          STATE_CONTAINER="${{ vars.TF_STATE_CONTAINER }}"
+          STATE_KEY="${{ vars.TF_STATE_KEY }}"
+
+          # Fall back to bootstrap defaults if repo variables are not yet configured
+          STATE_RG="${STATE_RG:-rg-tfstate}"
+          STATE_SA="${STATE_SA:-sttfstate1akc4957}"
+          STATE_CONTAINER="${STATE_CONTAINER:-tfstate}"
+          STATE_KEY="${STATE_KEY:-aks-infra.tfstate}"
+
+          echo "Initializing Terraform backend with Storage Account: $STATE_SA, Container: $STATE_CONTAINER, Key: $STATE_KEY in RG: $STATE_RG"
           terraform init -input=false \
-            -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}" \
-            -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
-            -backend-config="container_name=${{ vars.TF_STATE_CONTAINER }}" \
-            -backend-config="key=${{ vars.TF_STATE_KEY }}" \
-            -backend-config="use_azuread_auth=true"
+            -backend-config="resource_group_name=$STATE_RG" \
+            -backend-config="storage_account_name=$STATE_SA" \
+            -backend-config="container_name=$STATE_CONTAINER" \
+            -backend-config="key=$STATE_KEY" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="use_oidc=true" \
+            -backend-config="subscription_id=${{ steps.azure.outputs.subscription_id }}" \
+            -backend-config="tenant_id=${{ steps.azure.outputs.tenant_id }}" \
+            -backend-config="client_id=${{ steps.azure.outputs.client_id }}"
 
       - name: Terraform Validate
         run: terraform validate
