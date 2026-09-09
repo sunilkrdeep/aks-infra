@@ -102,7 +102,7 @@ jobs:
           STATE_KEY="${STATE_KEY:-aks-infra.tfstate}"
 
           echo "Initializing Terraform backend with Storage Account: $STATE_SA, Container: $STATE_CONTAINER, Key: $STATE_KEY in RG: $STATE_RG"
-          terraform init -input=false \
+          if ! terraform init -input=false \
             -backend-config="resource_group_name=$STATE_RG" \
             -backend-config="storage_account_name=$STATE_SA" \
             -backend-config="container_name=$STATE_CONTAINER" \
@@ -111,7 +111,11 @@ jobs:
             -backend-config="use_oidc=true" \
             -backend-config="subscription_id=${{ steps.azure.outputs.subscription_id }}" \
             -backend-config="tenant_id=${{ steps.azure.outputs.tenant_id }}" \
-            -backend-config="client_id=${{ steps.azure.outputs.client_id }}"
+            -backend-config="client_id=${{ steps.azure.outputs.client_id }}" 2>&1 | tee /tmp/init.log; then
+            INIT_ERR=$(cat /tmp/init.log | tr '\r\n' ' ' | head -c 3000)
+            echo "::error title=Terraform Init Failed::$INIT_ERR"
+            exit 1
+          fi
 
       - name: Terraform Validate
         run: terraform validate
