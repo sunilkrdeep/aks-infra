@@ -1,0 +1,23 @@
+# Copy this file to terraform.tfvars and fill in your subscription:
+#   copy terraform.tfvars.example terraform.tfvars
+#
+# Find your subscription ID:
+#   az login
+#   az account show --query id -o tsv
+
+subscription_id     = "00000000-0000-0000-0000-000000000000"
+location            = "eastus"
+resource_group_name = "rg-aks-lab"
+cluster_name        = "aks-lab"
+
+# Leave empty to use Azure's default Kubernetes version
+kubernetes_version = ""
+
+# 2 worker-node VMs. The AKS control plane is Azure-managed (not a VM you create).
+node_count      = 2
+node_vm_size    = "Standard_D2s_v3"
+os_disk_size_gb = 64
+
+# Optional: fixed ACR name (alphanumeric only). Empty = auto-generated.
+# acr_name = "acrsutramindlab01"
+# acr_sku  = "Basic"

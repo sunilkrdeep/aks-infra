@@ -1,0 +1,11 @@
+# Copy to backend.hcl (gitignored) after running scripts/bootstrap-state.*
+#
+#   copy backend.hcl.example backend.hcl
+#
+# Replace storage_account_name with the value printed by the bootstrap script.
+
+resource_group_name  = "rg-tfstate"
+storage_account_name = "sttfstateCHANGE_ME"
+container_name       = "tfstate"
+key                  = "aks-infra.tfstate"
+use_azuread_auth     = true
