@@ -1,7 +1,8 @@
 .terraform/
 *.tfstate
 *.tfstate.*
-*.tfvars
+# Allow terraform.tfvars
+!terraform.tfvars
 !terraform.tfvars.example
 backend.hcl
 crash.log

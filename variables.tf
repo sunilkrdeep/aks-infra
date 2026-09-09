@@ -8,7 +8,7 @@
 variable "enable_cluster" {
   description = "Set to true to deploy the AKS cluster, or false to destroy the cluster while keeping supporting resources (e.g. VNet, ACR)."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "subscription_id" {
