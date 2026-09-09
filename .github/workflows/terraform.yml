@@ -147,7 +147,17 @@ jobs:
           if [ -n "${{ vars.TF_VAR_os_disk_size_gb }}" ]; then
             EXTRA_VARS+=(-var="os_disk_size_gb=${{ vars.TF_VAR_os_disk_size_gb }}")
           fi
-          terraform plan -input=false -out=tfplan "${EXTRA_VARS[@]}"
+          if [ ${#EXTRA_VARS[@]} -gt 0 ]; then
+            PLAN_CMD=(terraform plan -input=false -out=tfplan "${EXTRA_VARS[@]}")
+          else
+            PLAN_CMD=(terraform plan -input=false -out=tfplan)
+          fi
+
+          if ! "${PLAN_CMD[@]}" 2>&1 | tee /tmp/plan.log; then
+            PLAN_ERR=$(cat /tmp/plan.log | tr '\r\n' ' ' | head -c 3000)
+            echo "::error title=Terraform Plan Failed::$PLAN_ERR"
+            exit 1
+          fi
           terraform show -no-color tfplan > tfplan.txt
 
       - name: Upload plan artifact
