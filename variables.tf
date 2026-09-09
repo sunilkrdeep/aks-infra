@@ -87,7 +87,6 @@ variable "aks_subnet_prefix" {
   type        = string
   default     = "10.10.1.0/24"
 }
-
 variable "acr_name" {
   description = "Azure Container Registry name (alphanumeric only). Empty = auto: acr{cluster}{suffix}."
   type        = string
@@ -112,5 +111,6 @@ variable "tags" {
     project     = "aks-lab"
     managed_by  = "terraform"
     environment = "dev"
+    owner       = "sunil"
   }
 }
