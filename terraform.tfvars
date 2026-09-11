@@ -10,7 +10,7 @@ location            = "southindia"
 resource_group_name = "aks-sutramind-rg"
 cluster_name        = "aks-sutramind"
 
-# Set to false to destroy the AKS cluster via code; set to true to recreate it
+# Set  to false to destroy the AKS cluster via code; set to true to recreate it
 enable_cluster = true
 
 # Leave empty to use Azure's default Kubernetes version
