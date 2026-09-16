@@ -1,285 +1,335 @@
-# Terraform CI/CD for aks-infra
-# Two-stage pipeline:
-#   Job 1: Plan (generates and publishes plan, comments on PR, displays on summary)
-#   Job 2: Apply / Destroy (requires manual approval via 'production' environment)
-#
-# OIDC only — no Azure client secrets / passwords on GitHub.
-
-name: Terraform
+name: Terraform AKS Infrastructure
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-  workflow_dispatch:
-    inputs:
-      action:
-        description: 'Terraform Action to perform'
-        required: true
-        type: choice
-        default: 'apply'
-        options:
-          - apply
-          - destroy
+    branches:
+      - main
 
 permissions:
   id-token: write
-  contents: write
-  pull-requests: write
+  contents: read
 
 env:
   TF_IN_AUTOMATION: "true"
   ARM_USE_OIDC: "true"
   ARM_USE_AZUREAD: "true"
-  TF_ACTION: ${{ github.event.inputs.action || 'apply' }}
 
 jobs:
-  # ============================================================================
-  # STAGE 1: PLAN
-  # ============================================================================
-  plan:
-    name: Terraform Plan
+
+  # ============================================================
+  # 1. TERRAFORM INIT
+  # ============================================================
+  terraform-init:
+
+    name: Terraform Init
+
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: .
 
     steps:
-      - name: Checkout Code
+
+      # --------------------------------------------------------
+      # Checkout repository
+      # --------------------------------------------------------
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Resolve Azure OIDC IDs
-        id: azure
-        env:
-          VAR_CLIENT: ${{ vars.AZURE_CLIENT_ID }}
-          VAR_TENANT: ${{ vars.AZURE_TENANT_ID }}
-          VAR_SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          SEC_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
-          SEC_TENANT: ${{ secrets.AZURE_TENANT_ID }}
-          SEC_SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: |
-          CLIENT_ID="$(echo "${VAR_CLIENT:-$SEC_CLIENT}" | tr -d '[:space:]')"
-          TENANT_ID="$(echo "${VAR_TENANT:-$SEC_TENANT}" | tr -d '[:space:]')"
-          SUBSCRIPTION_ID="$(echo "${VAR_SUB:-$SEC_SUB}" | tr -d '[:space:]')"
-          if [ -z "$CLIENT_ID" ] || [ -z "$TENANT_ID" ] || [ -z "$SUBSCRIPTION_ID" ]; then
-            echo "::error::Missing AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID."
-            exit 1
-          fi
-          echo "client_id=$CLIENT_ID" >> "$GITHUB_OUTPUT"
-          echo "tenant_id=$TENANT_ID" >> "$GITHUB_OUTPUT"
-          echo "subscription_id=$SUBSCRIPTION_ID" >> "$GITHUB_OUTPUT"
-
-      - name: Azure Login (OIDC — no client secret)
-        uses: azure/login@v3
+      # --------------------------------------------------------
+      # Azure login using OIDC
+      # --------------------------------------------------------
+      - name: Azure Login
+        uses: azure/login@v2
         with:
-          client-id: ${{ steps.azure.outputs.client_id }}
-          tenant-id: ${{ steps.azure.outputs.tenant_id }}
-          subscription-id: ${{ steps.azure.outputs.subscription_id }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # --------------------------------------------------------
+      # Install Terraform
+      # --------------------------------------------------------
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.9.8"
-          terraform_wrapper: false
+          terraform_version: 1.9.8
 
-      - name: Export ARM / TF env
+      # --------------------------------------------------------
+      # Configure Azure authentication for Terraform
+      # --------------------------------------------------------
+      - name: Configure Terraform Azure authentication
+        shell: bash
         run: |
-          echo "ARM_CLIENT_ID=${{ steps.azure.outputs.client_id }}" >> "$GITHUB_ENV"
-          echo "ARM_TENANT_ID=${{ steps.azure.outputs.tenant_id }}" >> "$GITHUB_ENV"
-          echo "ARM_SUBSCRIPTION_ID=${{ steps.azure.outputs.subscription_id }}" >> "$GITHUB_ENV"
-          echo "TF_VAR_subscription_id=${{ steps.azure.outputs.subscription_id }}" >> "$GITHUB_ENV"
+          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
+          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> "$GITHUB_ENV"
 
+      # --------------------------------------------------------
+      # Terraform formatting check
+      # --------------------------------------------------------
       - name: Terraform Format Check
-        id: fmt
         run: terraform fmt -check -recursive
-        continue-on-error: true
 
-      - name: Terraform Init
+      # --------------------------------------------------------
+      # Create backend configuration
+      # --------------------------------------------------------
+      - name: Create backend configuration
+        shell: bash
         run: |
-          set -o pipefail
-          STATE_RG="$(echo "${{ vars.TF_STATE_RESOURCE_GROUP || 'rg-tfstate' }}" | tr -d '[:space:]')"
-          STATE_SA="$(echo "${{ vars.TF_STATE_STORAGE_ACCOUNT || 'sttfstate1akc4957' }}" | tr -d '[:space:]')"
-          STATE_CONTAINER="$(echo "${{ vars.TF_STATE_CONTAINER || 'tfstate' }}" | tr -d '[:space:]')"
-          STATE_KEY="$(echo "${{ vars.TF_STATE_KEY || 'aks-infra.tfstate' }}" | tr -d '[:space:]')"
+          cat > backend.hcl <<EOF
+          resource_group_name  = "${{ vars.TF_STATE_RESOURCE_GROUP }}"
+          storage_account_name = "${{ vars.TF_STATE_STORAGE_ACCOUNT }}"
+          container_name       = "${{ vars.TF_STATE_CONTAINER }}"
+          key                  = "${{ vars.TF_STATE_KEY }}"
 
-          cat <<EOF > backend.hcl
-          resource_group_name  = "$STATE_RG"
-          storage_account_name = "$STATE_SA"
-          container_name       = "$STATE_CONTAINER"
-          key                  = "$STATE_KEY"
-          use_azuread_auth     = true
-          use_oidc             = true
-          subscription_id      = "${{ steps.azure.outputs.subscription_id }}"
-          tenant_id            = "${{ steps.azure.outputs.tenant_id }}"
-          client_id            = "${{ steps.azure.outputs.client_id }}"
+          use_azuread_auth = true
+          use_oidc         = true
+
+          subscription_id = "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          tenant_id       = "${{ secrets.AZURE_TENANT_ID }}"
+          client_id       = "${{ secrets.AZURE_CLIENT_ID }}"
           EOF
 
-          terraform init -input=false -reconfigure -backend-config=backend.hcl 2>&1 | tee /tmp/init.log
+      # --------------------------------------------------------
+      # Terraform Init
+      # --------------------------------------------------------
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -input=false \
+            -backend-config=backend.hcl
 
+
+  # ============================================================
+  # 2. TERRAFORM PLAN
+  #
+  # The GitHub Environment provides Approval #1
+  # ============================================================
+  terraform-plan:
+
+    name: Terraform Plan
+
+    needs:
+      - terraform-init
+
+    runs-on: ubuntu-latest
+
+    environment:
+      name: terraform-plan-approval
+
+    steps:
+
+      # --------------------------------------------------------
+      # Checkout the exact commit that was merged
+      # --------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # Azure login
+      # --------------------------------------------------------
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # --------------------------------------------------------
+      # Setup Terraform
+      # --------------------------------------------------------
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      # --------------------------------------------------------
+      # Configure Terraform authentication
+      # --------------------------------------------------------
+      - name: Configure Terraform Azure authentication
+        shell: bash
+        run: |
+          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
+          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> "$GITHUB_ENV"
+
+         
+      # --------------------------------------------------------
+      # Backend configuration
+      # --------------------------------------------------------
+      - name: Create backend configuration
+        shell: bash
+        run: |
+          cat > backend.hcl <<EOF
+          resource_group_name  = "${{ vars.TF_STATE_RESOURCE_GROUP }}"
+          storage_account_name = "${{ vars.TF_STATE_STORAGE_ACCOUNT }}"
+          container_name       = "${{ vars.TF_STATE_CONTAINER }}"
+          key                  = "${{ vars.TF_STATE_KEY }}"
+
+          use_azuread_auth = true
+          use_oidc         = true
+
+          subscription_id = "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          tenant_id       = "${{ secrets.AZURE_TENANT_ID }}"
+          client_id       = "${{ secrets.AZURE_CLIENT_ID }}"
+          EOF
+
+      # --------------------------------------------------------
+      # Terraform Init
+      #
+      # Required because every GitHub Actions job starts
+      # on a fresh runner.
+      # --------------------------------------------------------
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -input=false \
+            -backend-config=backend.hcl
+
+      # --------------------------------------------------------
+      # Terraform Validate
+      # --------------------------------------------------------
       - name: Terraform Validate
         run: terraform validate
 
-      - name: Terraform Plan (${{ env.TF_ACTION }})
-        id: plan
+      # --------------------------------------------------------
+      # Terraform Plan
+      #
+      # IMPORTANT:
+      # Do NOT pass location, RG, cluster name, node count, etc.
+      # using -var here.
+      #
+      # Terraform will therefore use terraform.tfvars.
+      # --------------------------------------------------------
+      - name: Terraform Plan
         run: |
-          EXTRA_VARS=(-var="subscription_id=${{ steps.azure.outputs.subscription_id }}")
-          if [ -n "${{ vars.TF_VAR_location }}" ]; then EXTRA_VARS+=(-var="location=${{ vars.TF_VAR_location }}"); fi
-          if [ -n "${{ vars.TF_VAR_resource_group_name }}" ]; then EXTRA_VARS+=(-var="resource_group_name=${{ vars.TF_VAR_resource_group_name }}"); fi
-          if [ -n "${{ vars.TF_VAR_cluster_name }}" ]; then EXTRA_VARS+=(-var="cluster_name=${{ vars.TF_VAR_cluster_name }}"); fi
-          if [ -n "${{ vars.TF_VAR_node_count }}" ]; then EXTRA_VARS+=(-var="node_count=${{ vars.TF_VAR_node_count }}"); fi
-          
-          NODE_VM_SIZE="$(echo "${{ vars.TF_VAR_node_vm_size || 'Standard_B2s_v2' }}" | tr -d '[:space:]')"
-          if [ "$NODE_VM_SIZE" = "Standard_B2s" ]; then NODE_VM_SIZE="Standard_B2s_v2"; fi
-          EXTRA_VARS+=(-var="node_vm_size=$NODE_VM_SIZE")
-          if [ -n "${{ vars.TF_VAR_os_disk_size_gb }}" ]; then EXTRA_VARS+=(-var="os_disk_size_gb=${{ vars.TF_VAR_os_disk_size_gb }}"); fi
+          terraform plan \
+            -input=false \
+            -out=tfplan
 
-          PLAN_FLAGS=(-input=false -out=tfplan "${EXTRA_VARS[@]}")
-          if [ "${{ env.TF_ACTION }}" = "destroy" ]; then
-            echo "Creating DESTROY plan..."
-            PLAN_FLAGS+=(-destroy)
-          fi
-
-          if ! terraform plan "${PLAN_FLAGS[@]}" 2>&1 | tee /tmp/plan.log; then
-            PLAN_ERR=$(cat /tmp/plan.log | tr '\r\n' ' ' | sed 's/::/ - /g' | head -c 1000)
-            echo "::error::$PLAN_ERR"
-            exit 1
-          fi
-          terraform show -no-color tfplan > tfplan.txt
-
-      - name: Publish Plan to Job Summary
+      # --------------------------------------------------------
+      # Convert plan to human-readable output
+      # --------------------------------------------------------
+      - name: Create readable Terraform plan
         run: |
-          echo "## Terraform Plan Result (${{ env.TF_ACTION }})" >> $GITHUB_STEP_SUMMARY
-          echo '```terraform' >> $GITHUB_STEP_SUMMARY
-          cat tfplan.txt | head -c 50000 >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          terraform show \
+            -no-color \
+            tfplan > tfplan.txt
 
-      - name: Upload Plan Artifact
+      # --------------------------------------------------------
+      # Upload plan for review
+      # --------------------------------------------------------
+      - name: Upload Terraform Plan
         uses: actions/upload-artifact@v4
         with:
-          name: tfplan
+          name: terraform-plan
           path: |
             tfplan
             tfplan.txt
           retention-days: 7
 
-      - name: Comment Plan on Pull Request
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const plan = fs.readFileSync('tfplan.txt', 'utf8');
-            const truncated = plan.length > 60000 ? plan.substring(0, 60000) + '\n\n… truncated …' : plan;
-            const body = `#### Terraform Plan (${process.env.TF_ACTION})\n\`\`\`\n${truncated}\n\`\`\`\n*Pusher: @${{ github.actor }}* | *Workflow: \`${{ github.workflow }}\`*`;
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body
-            });
 
-  # ============================================================================
-  # STAGE 2: APPLY / DESTROY (With Review Approval Gate)
-  # ============================================================================
-  apply:
+  # ============================================================
+  # 3. TERRAFORM APPLY
+  #
+  # The GitHub Environment provides Approval #2
+  # ============================================================
+  terraform-apply:
+
     name: Terraform Apply
-    needs: [plan]
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+
+    needs:
+      - terraform-plan
+
     runs-on: ubuntu-latest
-    # The 'terraform-approval' environment enforces the manual approval gate in GitHub Settings
-    defaults:
-      run:
-        working-directory: .
+
+    environment:
+      name: terraform-apply-approval
 
     steps:
-      - name: Checkout Code
+
+      # --------------------------------------------------------
+      # Checkout repository
+      # --------------------------------------------------------
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Resolve Azure OIDC IDs
-        id: azure
-        env:
-          VAR_CLIENT: ${{ vars.AZURE_CLIENT_ID }}
-          VAR_TENANT: ${{ vars.AZURE_TENANT_ID }}
-          VAR_SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          SEC_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
-          SEC_TENANT: ${{ secrets.AZURE_TENANT_ID }}
-          SEC_SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: |
-          CLIENT_ID="$(echo "${VAR_CLIENT:-$SEC_CLIENT}" | tr -d '[:space:]')"
-          TENANT_ID="$(echo "${VAR_TENANT:-$SEC_TENANT}" | tr -d '[:space:]')"
-          SUBSCRIPTION_ID="$(echo "${VAR_SUB:-$SEC_SUB}" | tr -d '[:space:]')"
-          echo "client_id=$CLIENT_ID" >> "$GITHUB_OUTPUT"
-          echo "tenant_id=$TENANT_ID" >> "$GITHUB_OUTPUT"
-          echo "subscription_id=$SUBSCRIPTION_ID" >> "$GITHUB_OUTPUT"
-
-      - name: Azure Login (OIDC — no client secret)
-        uses: azure/login@v3
+      # --------------------------------------------------------
+      # Azure login
+      # --------------------------------------------------------
+      - name: Azure Login
+        uses: azure/login@v2
         with:
-          client-id: ${{ steps.azure.outputs.client_id }}
-          tenant-id: ${{ steps.azure.outputs.tenant_id }}
-          subscription-id: ${{ steps.azure.outputs.subscription_id }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # --------------------------------------------------------
+      # Setup Terraform
+      # --------------------------------------------------------
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.9.8"
-          terraform_wrapper: false
+          terraform_version: 1.9.8
 
-      - name: Download Plan Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: tfplan
-
-      - name: Terraform Init
+      # --------------------------------------------------------
+      # Configure Terraform authentication
+      # --------------------------------------------------------
+      - name: Configure Terraform Azure authentication
+        shell: bash
         run: |
-          STATE_RG="$(echo "${{ vars.TF_STATE_RESOURCE_GROUP || 'rg-tfstate' }}" | tr -d '[:space:]')"
-          STATE_SA="$(echo "${{ vars.TF_STATE_STORAGE_ACCOUNT || 'sttfstate1akc4957' }}" | tr -d '[:space:]')"
-          STATE_CONTAINER="$(echo "${{ vars.TF_STATE_CONTAINER || 'tfstate' }}" | tr -d '[:space:]')"
-          STATE_KEY="$(echo "${{ vars.TF_STATE_KEY || 'aks-infra.tfstate' }}" | tr -d '[:space:]')"
+          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
+          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> "$GITHUB_ENV"
 
-          cat <<EOF > backend.hcl
-          resource_group_name  = "$STATE_RG"
-          storage_account_name = "$STATE_SA"
-          container_name       = "$STATE_CONTAINER"
-          key                  = "$STATE_KEY"
-          use_azuread_auth     = true
-          use_oidc             = true
-          subscription_id      = "${{ steps.azure.outputs.subscription_id }}"
-          tenant_id            = "${{ steps.azure.outputs.tenant_id }}"
-          client_id            = "${{ steps.azure.outputs.client_id }}"
+       
+      # --------------------------------------------------------
+      # Backend configuration
+      # --------------------------------------------------------
+      - name: Create backend configuration
+        shell: bash
+        run: |
+          cat > backend.hcl <<EOF
+          resource_group_name  = "${{ vars.TF_STATE_RESOURCE_GROUP }}"
+          storage_account_name = "${{ vars.TF_STATE_STORAGE_ACCOUNT }}"
+          container_name       = "${{ vars.TF_STATE_CONTAINER }}"
+          key                  = "${{ vars.TF_STATE_KEY }}"
+
+          use_azuread_auth = true
+          use_oidc         = true
+
+          subscription_id = "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          tenant_id       = "${{ secrets.AZURE_TENANT_ID }}"
+          client_id       = "${{ secrets.AZURE_CLIENT_ID }}"
           EOF
 
-          terraform init -input=false -reconfigure -backend-config=backend.hcl
-
-      - name: Execute Terraform Plan (Apply or Destroy)
+      # --------------------------------------------------------
+      # Terraform Init
+      # --------------------------------------------------------
+      - name: Terraform Init
         run: |
-          set -o pipefail
-          echo "Executing approved plan..."
-          terraform apply -input=false -auto-approve tfplan 2>&1 | tee /tmp/apply.log
+          terraform init \
+            -input=false \
+            -backend-config=backend.hcl
 
-      - name: Print Downstream Outputs
-        if: env.TF_ACTION != 'destroy'
-        run: |
-          echo "=== Set these on sample-app GitHub Variables ==="
-          echo "ACR_NAME=$(terraform output -raw acr_name 2>/dev/null || true)"
-          echo "AKS_RESOURCE_GROUP=$(terraform output -raw resource_group_name 2>/dev/null || true)"
-          echo "AKS_CLUSTER_NAME=$(terraform output -raw cluster_name 2>/dev/null || true)"
-          echo "ACR_LOGIN_SERVER=$(terraform output -raw acr_login_server 2>/dev/null || true)"
-
-      - name: Post Failure Diagnostics to Commit Comment
-        if: failure()
-        uses: actions/github-script@v7
+      # --------------------------------------------------------
+      # Download the EXACT plan generated by the Plan job
+      # --------------------------------------------------------
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
         with:
-          script: |
-            const fs = require('fs');
-            let body = '### Diagnostic Log\n';
-            if (fs.existsSync('/tmp/apply.log')) {
-              body += '#### Apply Log\n```text\n' + fs.readFileSync('/tmp/apply.log', 'utf8').substring(0, 30000) + '\n```\n';
-            }
-            await github.rest.repos.createCommitComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              commit_sha: context.sha,
-              body
-            });
+          name: terraform-plan
+
+      # --------------------------------------------------------
+      # Apply the reviewed plan
+      # --------------------------------------------------------
+      - name: Terraform Apply
+        run: |
+          terraform apply \
+            -input=false \
+            -auto-approve \
+            tfplan
+
+      # --------------------------------------------------------
+      # Show Terraform outputs
+      # --------------------------------------------------------
+      - name: Terraform Outputs
+        run: |
+          terraform output
