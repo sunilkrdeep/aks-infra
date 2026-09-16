@@ -1,225 +1,274 @@
-name: Terraform AKS Infrastructure
+name: Terraform Azure Infrastructure
 
 on:
   push:
     branches:
       - main
 
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Terraform environment to deploy"
+        required: true
+        type: choice
+        options:
+          - ci01
+          - ci02
+          - prod
+        default: ci01
+
+# Required for Azure OIDC authentication
 permissions:
   id-token: write
   contents: read
 
 env:
   TF_IN_AUTOMATION: "true"
+
+  # AzureRM authentication through GitHub OIDC
   ARM_USE_OIDC: "true"
   ARM_USE_AZUREAD: "true"
+
+  # These are GitHub Repository Variables
+  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+  TF_VERSION: "1.9.8"
+
 
 jobs:
 
   # ============================================================
-  # 1. TERRAFORM INIT
+  # 1. DETERMINE ENVIRONMENT
+  # ============================================================
+  prepare:
+    name: Select Terraform Environment
+    runs-on: ubuntu-latest
+
+    outputs:
+      environment: ${{ steps.env.outputs.environment }}
+      tfvars_file: ${{ steps.env.outputs.tfvars_file }}
+      state_key: ${{ steps.env.outputs.state_key }}
+
+    steps:
+      - name: Determine environment
+        id: env
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ENVIRONMENT="${{ inputs.environment }}"
+          else
+            # Automatic deployment after merge to main.
+            # Change this default if main should deploy another environment.
+            ENVIRONMENT="ci01"
+          fi
+
+          case "$ENVIRONMENT" in
+            ci01)
+              TFVARS_FILE="environments/ci01/terraform.tfvars"
+              STATE_KEY="ci01.tfstate"
+              ;;
+            ci02)
+              TFVARS_FILE="environments/ci02/terraform.tfvars"
+              STATE_KEY="ci02.tfstate"
+              ;;
+            prod)
+              TFVARS_FILE="environments/prod/terraform.tfvars"
+              STATE_KEY="prod.tfstate"
+              ;;
+            *)
+              echo "ERROR: Unsupported environment: $ENVIRONMENT"
+              exit 1
+              ;;
+          esac
+
+          echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
+          echo "tfvars_file=$TFVARS_FILE" >> "$GITHUB_OUTPUT"
+          echo "state_key=$STATE_KEY" >> "$GITHUB_OUTPUT"
+
+          echo "Environment : $ENVIRONMENT"
+          echo "TF vars     : $TFVARS_FILE"
+          echo "State key   : $STATE_KEY"
+
+
+  # ============================================================
+  # 2. TERRAFORM INIT + VALIDATE
   # ============================================================
   terraform-init:
-
-    name: Terraform Init
-
+    name: Terraform Init and Validate
+    needs: prepare
     runs-on: ubuntu-latest
+
+    environment:
+      name: terraform-init-approval
 
     steps:
 
-      # --------------------------------------------------------
-      # Checkout repository
-      # --------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --------------------------------------------------------
-      # Azure login using OIDC
-      # --------------------------------------------------------
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      # --------------------------------------------------------
-      # Install Terraform
-      # --------------------------------------------------------
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.9.8
+          terraform_version: ${{ env.TF_VERSION }}
 
-      # --------------------------------------------------------
-      # Configure Azure authentication for Terraform
-      # --------------------------------------------------------
-      - name: Configure Terraform Azure authentication
-        shell: bash
-        run: |
-          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
-          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
-          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> "$GITHUB_ENV"
+      # ----------------------------------------------------------
+      # Azure OIDC login
+      # IMPORTANT:
+      # These are GitHub VARIABLES, not secrets.
+      # ----------------------------------------------------------
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # --------------------------------------------------------
-      # Terraform formatting check
-      # --------------------------------------------------------
-      - name: Terraform Format Check
-        run: terraform fmt -check -recursive
-
-      # --------------------------------------------------------
-      # Create backend configuration
-      # --------------------------------------------------------
+      # ----------------------------------------------------------
+      # Create backend configuration dynamically
+      # ----------------------------------------------------------
       - name: Create backend configuration
         shell: bash
         run: |
+          set -euo pipefail
+
           cat > backend.hcl <<EOF
           resource_group_name  = "${{ vars.TF_STATE_RESOURCE_GROUP }}"
           storage_account_name = "${{ vars.TF_STATE_STORAGE_ACCOUNT }}"
           container_name       = "${{ vars.TF_STATE_CONTAINER }}"
-          key                  = "${{ vars.TF_STATE_KEY }}"
+          key                  = "${{ needs.prepare.outputs.state_key }}"
 
           use_azuread_auth = true
           use_oidc         = true
 
-          subscription_id = "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-          tenant_id       = "${{ secrets.AZURE_TENANT_ID }}"
-          client_id       = "${{ secrets.AZURE_CLIENT_ID }}"
+          subscription_id = "${{ vars.AZURE_SUBSCRIPTION_ID }}"
+          tenant_id       = "${{ vars.AZURE_TENANT_ID }}"
+          client_id       = "${{ vars.AZURE_CLIENT_ID }}"
           EOF
 
-      # --------------------------------------------------------
-      # Terraform Init
-      # --------------------------------------------------------
+          echo "Backend state key:"
+          echo "${{ needs.prepare.outputs.state_key }}"
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
       - name: Terraform Init
         run: |
           terraform init \
             -input=false \
             -backend-config=backend.hcl
 
+      - name: Terraform Validate
+        run: terraform validate
+
 
   # ============================================================
-  # 2. TERRAFORM PLAN
-  #
-  # The GitHub Environment provides Approval #1
+  # 3. TERRAFORM PLAN
   # ============================================================
   terraform-plan:
-
     name: Terraform Plan
-
     needs:
+      - prepare
       - terraform-init
 
     runs-on: ubuntu-latest
 
+    # First approval gate.
+    # Configure required reviewers for this environment in:
+    # GitHub → Settings → Environments
     environment:
       name: terraform-plan-approval
 
     steps:
 
-      # --------------------------------------------------------
-      # Checkout the exact commit that was merged
-      # --------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --------------------------------------------------------
-      # Azure login
-      # --------------------------------------------------------
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      # --------------------------------------------------------
-      # Setup Terraform
-      # --------------------------------------------------------
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.9.8
+          terraform_version: ${{ env.TF_VERSION }}
 
-      # --------------------------------------------------------
-      # Configure Terraform authentication
-      # --------------------------------------------------------
-      - name: Configure Terraform Azure authentication
-        shell: bash
-        run: |
-          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
-          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
-          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> "$GITHUB_ENV"
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-         
-      # --------------------------------------------------------
-      # Backend configuration
-      # --------------------------------------------------------
+      # ----------------------------------------------------------
+      # Create backend configuration
+      # ----------------------------------------------------------
       - name: Create backend configuration
         shell: bash
         run: |
+          set -euo pipefail
+
           cat > backend.hcl <<EOF
           resource_group_name  = "${{ vars.TF_STATE_RESOURCE_GROUP }}"
           storage_account_name = "${{ vars.TF_STATE_STORAGE_ACCOUNT }}"
           container_name       = "${{ vars.TF_STATE_CONTAINER }}"
-          key                  = "${{ vars.TF_STATE_KEY }}"
+          key                  = "${{ needs.prepare.outputs.state_key }}"
 
           use_azuread_auth = true
           use_oidc         = true
 
-          subscription_id = "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-          tenant_id       = "${{ secrets.AZURE_TENANT_ID }}"
-          client_id       = "${{ secrets.AZURE_CLIENT_ID }}"
+          subscription_id = "${{ vars.AZURE_SUBSCRIPTION_ID }}"
+          tenant_id       = "${{ vars.AZURE_TENANT_ID }}"
+          client_id       = "${{ vars.AZURE_CLIENT_ID }}"
           EOF
 
-      # --------------------------------------------------------
-      # Terraform Init
-      #
-      # Required because every GitHub Actions job starts
-      # on a fresh runner.
-      # --------------------------------------------------------
       - name: Terraform Init
         run: |
           terraform init \
             -input=false \
             -backend-config=backend.hcl
 
-      # --------------------------------------------------------
-      # Terraform Validate
-      # --------------------------------------------------------
-      - name: Terraform Validate
-        run: terraform validate
+      # ----------------------------------------------------------
+      # Verify the selected environment file exists
+      # ----------------------------------------------------------
+      - name: Verify Terraform variables file
+        run: |
+          test -f "${{ needs.prepare.outputs.tfvars_file }}" || {
+            echo "ERROR: Terraform variables file does not exist:"
+            echo "${{ needs.prepare.outputs.tfvars_file }}"
+            exit 1
+          }
 
-      # --------------------------------------------------------
+          echo "Using:"
+          echo "${{ needs.prepare.outputs.tfvars_file }}"
+
+      # ----------------------------------------------------------
       # Terraform Plan
-      #
-      # IMPORTANT:
-      # Do NOT pass location, RG, cluster name, node count, etc.
-      # using -var here.
-      #
-      # Terraform will therefore use terraform.tfvars.
-      # --------------------------------------------------------
+      # ----------------------------------------------------------
       - name: Terraform Plan
         run: |
           terraform plan \
             -input=false \
+            -var-file="${{ needs.prepare.outputs.tfvars_file }}" \
             -out=tfplan
 
-      # --------------------------------------------------------
-      # Convert plan to human-readable output
-      # --------------------------------------------------------
-      - name: Create readable Terraform plan
+      # ----------------------------------------------------------
+      # Create human-readable plan
+      # ----------------------------------------------------------
+      - name: Export readable Terraform plan
         run: |
           terraform show \
             -no-color \
             tfplan > tfplan.txt
 
-      # --------------------------------------------------------
-      # Upload plan for review
-      # --------------------------------------------------------
-      - name: Upload Terraform Plan
+      # ----------------------------------------------------------
+      # Upload both:
+      #   tfplan    = exact binary plan used for apply
+      #   tfplan.txt = human-readable review copy
+      # ----------------------------------------------------------
+      - name: Upload Terraform plan
         uses: actions/upload-artifact@v4
         with:
-          name: terraform-plan
+          name: terraform-plan-${{ needs.prepare.outputs.environment }}
           path: |
             tfplan
             tfplan.txt
@@ -227,99 +276,93 @@ jobs:
 
 
   # ============================================================
-  # 3. TERRAFORM APPLY
-  #
-  # The GitHub Environment provides Approval #2
+  # 4. TERRAFORM APPLY
   # ============================================================
   terraform-apply:
-
     name: Terraform Apply
-
     needs:
+      - prepare
       - terraform-plan
 
     runs-on: ubuntu-latest
 
+    # Second approval gate.
+    # Configure required reviewers for this environment in:
+    # GitHub → Settings → Environments
     environment:
       name: terraform-apply-approval
 
     steps:
 
-      # --------------------------------------------------------
-      # Checkout repository
-      # --------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --------------------------------------------------------
-      # Azure login
-      # --------------------------------------------------------
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      # --------------------------------------------------------
-      # Setup Terraform
-      # --------------------------------------------------------
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.9.8
+          terraform_version: ${{ env.TF_VERSION }}
 
-      # --------------------------------------------------------
-      # Configure Terraform authentication
-      # --------------------------------------------------------
-      - name: Configure Terraform Azure authentication
-        shell: bash
-        run: |
-          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> "$GITHUB_ENV"
-          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> "$GITHUB_ENV"
-          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> "$GITHUB_ENV"
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-       
-      # --------------------------------------------------------
-      # Backend configuration
-      # --------------------------------------------------------
+      # ----------------------------------------------------------
+      # Create backend configuration
+      # ----------------------------------------------------------
       - name: Create backend configuration
         shell: bash
         run: |
+          set -euo pipefail
+
           cat > backend.hcl <<EOF
           resource_group_name  = "${{ vars.TF_STATE_RESOURCE_GROUP }}"
           storage_account_name = "${{ vars.TF_STATE_STORAGE_ACCOUNT }}"
           container_name       = "${{ vars.TF_STATE_CONTAINER }}"
-          key                  = "${{ vars.TF_STATE_KEY }}"
+          key                  = "${{ needs.prepare.outputs.state_key }}"
 
           use_azuread_auth = true
           use_oidc         = true
 
-          subscription_id = "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-          tenant_id       = "${{ secrets.AZURE_TENANT_ID }}"
-          client_id       = "${{ secrets.AZURE_CLIENT_ID }}"
+          subscription_id = "${{ vars.AZURE_SUBSCRIPTION_ID }}"
+          tenant_id       = "${{ vars.AZURE_TENANT_ID }}"
+          client_id       = "${{ vars.AZURE_CLIENT_ID }}"
           EOF
 
-      # --------------------------------------------------------
-      # Terraform Init
-      # --------------------------------------------------------
       - name: Terraform Init
         run: |
           terraform init \
             -input=false \
             -backend-config=backend.hcl
 
-      # --------------------------------------------------------
-      # Download the EXACT plan generated by the Plan job
-      # --------------------------------------------------------
-      - name: Download Terraform Plan
+      # ----------------------------------------------------------
+      # Download EXACT plan generated by terraform-plan job
+      # ----------------------------------------------------------
+      - name: Download Terraform plan
         uses: actions/download-artifact@v4
         with:
-          name: terraform-plan
+          name: terraform-plan-${{ needs.prepare.outputs.environment }}
+          path: .
 
-      # --------------------------------------------------------
-      # Apply the reviewed plan
-      # --------------------------------------------------------
+      # ----------------------------------------------------------
+      # Show plan that will be applied
+      # ----------------------------------------------------------
+      - name: Display Terraform plan
+        run: |
+          echo "============================================"
+          echo "Environment: ${{ needs.prepare.outputs.environment }}"
+          echo "State key:   ${{ needs.prepare.outputs.state_key }}"
+          echo "============================================"
+
+          cat tfplan.txt
+
+      # ----------------------------------------------------------
+      # Apply EXACT binary plan.
+      #
+      # No new plan is generated here.
+      # ----------------------------------------------------------
       - name: Terraform Apply
         run: |
           terraform apply \
@@ -327,9 +370,9 @@ jobs:
             -auto-approve \
             tfplan
 
-      # --------------------------------------------------------
-      # Show Terraform outputs
-      # --------------------------------------------------------
+      # ----------------------------------------------------------
+      # Show outputs
+      # ----------------------------------------------------------
       - name: Terraform Outputs
         run: |
           terraform output
