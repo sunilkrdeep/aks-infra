@@ -1,14 +1,17 @@
 # -----------------------------------------------------------------------------
-# providers.tf — how Terraform authenticates to Azure
+# AzureRM provider
 #
-# Local laptop:  az login   (interactive — nothing secret is committed)
-# GitHub Actions: OIDC via env ARM_USE_OIDC=true (see .github/workflows).
-#                 Never set ARM_CLIENT_SECRET. Never commit client secrets.
+# Authentication is supplied by the execution environment:
 #
-# azurerm 4.x requires subscription_id explicitly (it no longer infers it).
+# Local development:
+#   az login
+#
+# GitHub Actions:
+#   Azure OIDC via ARM_* environment variables
+#
+# No client secret is stored in Terraform configuration.
 # -----------------------------------------------------------------------------
 
 provider "azurerm" {
   features {}
-  subscription_id = var.subscription_id
 }

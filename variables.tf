@@ -12,8 +12,17 @@ variable "enable_cluster" {
 }
 
 variable "subscription_id" {
-  description = "Azure subscription ID that will own the AKS resources. Find it with: az account show --query id -o tsv"
+  description = "Azure subscription ID supplied by the CI/CD environment."
   type        = string
+
+  validation {
+    condition     = can(regex(
+      "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      var.subscription_id
+    ))
+
+    error_message = "subscription_id must be a valid Azure subscription GUID."
+  }
 }
 
 variable "location" {
