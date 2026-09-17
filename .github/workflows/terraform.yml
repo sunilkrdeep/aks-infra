@@ -209,19 +209,24 @@ jobs:
 
       - name: Verify Terraform variables file
         run: |
-          test -f "${{ needs.prepare.outputs.tfvars_file }}" || {
+          set -euo pipefail
+
+          TFVARS_FILE="${{ needs.prepare.outputs.tfvars_file }}"
+
+          test -f "$TFVARS_FILE" || {
             echo "ERROR: Terraform variables file does not exist:"
-            echo "${{ needs.prepare.outputs.tfvars_file }}"
+            echo "$TFVARS_FILE"
             exit 1
           }
 
           echo "Using Terraform variables:"
-          echo "${{ needs.prepare.outputs.tfvars_file }}"
+          echo "$TFVARS_FILE"
 
       - name: Terraform Plan
         run: |
           terraform plan \
             -input=false \
+            -var="subscription_id=${ARM_SUBSCRIPTION_ID}" \
             -var-file="${{ needs.prepare.outputs.tfvars_file }}" \
             -out=tfplan
 
