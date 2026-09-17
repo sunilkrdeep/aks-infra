@@ -1,6 +1,6 @@
 # aks-infra (GitHub) — AKS + ACR via Terraform CI/CD
 
-**GitHub Free is enough** for this lab (no paid plan). Sign up at https://github.com/signup then follow [docs/GITHUB-BOOTSTRAP.md](docs/GITHUB-BOOTSTRAP.md).
+**GitHub Free is enough** for this lab; this repository uses a manual apply workflow rather than GitHub Environment required-reviewer gates. Sign up at https://github.com/signup then follow [docs/GITHUB-BOOTSTRAP.md](docs/GITHUB-BOOTSTRAP.md).
 
 Companion app repo: **`sample-app`** (build image → push ACR → deploy to AKS).
 
@@ -40,7 +40,8 @@ Subscription
 cd aks-cluster
 
 copy terraform.tfvars.example terraform.tfvars
-# set subscription_id, location, cluster_name, …
+# set location, resource_group_name, cluster_name, and node settings
+# Azure subscription/authentication comes from your local Azure CLI or GitHub OIDC.
 
 .\scripts\bootstrap-state.ps1   # once
 terraform init -backend-config=backend.hcl
@@ -63,17 +64,18 @@ terraform output acr_login_server
 
 | Event | Action |
 |-------|--------|
-| Pull request to `main` | `terraform plan` (+ PR comment) |
-| Push to `main` | `terraform apply` |
+| Push to `main` | `terraform plan` and upload reviewed plan artifact |
+| Manual `Terraform Apply` workflow | Apply the exact reviewed plan artifact |
 
-Workflow: [`.github/workflows/terraform.yml`](.github/workflows/terraform.yml)
+Workflows: [`.github/workflows/terraform-plan.yml`](.github/workflows/terraform-plan.yml) and [`.github/workflows/terraform-apply.yml`](.github/workflows/terraform-apply.yml)
 
-Required GitHub **Variables** (not Secrets / not passwords): `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `TF_STATE_RESOURCE_GROUP`, `TF_STATE_STORAGE_ACCOUNT`, `TF_STATE_CONTAINER`, `TF_STATE_KEY`  
-Optional Variables: `TF_VAR_location`, `TF_VAR_resource_group_name`, `TF_VAR_cluster_name`, `TF_VAR_node_count`, `TF_VAR_node_vm_size`
+Required GitHub **Variables** (not Secrets / not passwords): `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `TF_STATE_RESOURCE_GROUP`, `TF_STATE_STORAGE_ACCOUNT`, `TF_STATE_CONTAINER`.
+
+Infrastructure settings come from `environments/<environment>/terraform.tfvars`; GitHub `TF_VAR_*` infrastructure overrides are intentionally not used.
 
 Auth is **OIDC** only — never add `AZURE_CLIENT_SECRET` or `AZURE_CREDENTIALS` to GitHub. See [docs/GITHUB-OIDC.md](docs/GITHUB-OIDC.md).
 
-Never commit `terraform.tfvars`, `backend.hcl`, or `*.tfstate`.
+Never commit `backend.hcl` or `*.tfstate`. Environment `.tfvars` files contain infrastructure configuration only and are intended to be committed.
 
 ---
 
@@ -94,4 +96,5 @@ terraform destroy
 | `network.tf` / `aks.tf` / `acr.tf` | RG, VNet, AKS, ACR |
 | `backend.tf` | Remote state backend (partial) |
 | `scripts/bootstrap-state.*` | Create state storage once |
-| `.github/workflows/terraform.yml` | Plan / apply pipeline |
+| `.github/workflows/terraform-plan.yml` | Automatic Terraform plan + artifact |
+| `.github/workflows/terraform-apply.yml` | Manual apply of reviewed plan |
