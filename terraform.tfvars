@@ -1,3 +1,11 @@
+# Copy this file to terraform.tfvars and fill in your subscription:
+#   copy terraform.tfvars.example terraform.tfvars
+#
+# Find your subscription ID:
+#   az login
+#   az account show --query id -o tsv
+
+subscription_id     = "XXXXXXXXXXXXXX"
 location            = "centralindia"
 resource_group_name = "Sutramind-ci01-rg"
 cluster_name        = "sutramind-ci01-aks"

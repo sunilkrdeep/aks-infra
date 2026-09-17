@@ -18,7 +18,3 @@ terraform.rc
 *.plan
 tfplan
 tfplan.json
-
-# Environment Terraform configuration is non-secret and intentionally tracked
-!environments/
-!environments/**

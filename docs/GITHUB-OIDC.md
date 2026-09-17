@@ -151,7 +151,13 @@ These are identifiers. Workflows request an OIDC token; Entra exchanges it for a
 | `TF_STATE_RESOURCE_GROUP` | `rg-tfstate` |
 | `TF_STATE_STORAGE_ACCOUNT` | `sttfstate1akc4957` |
 | `TF_STATE_CONTAINER` | `tfstate` |
-| `TF_STATE_KEY` | Legacy/local only; CI uses the environment-specific state key (`ci01.tfstate`, `ci02.tfstate`, `prod.tfstate`) |
+| `TF_STATE_KEY` | `aks-infra.tfstate` |
+| `TF_VAR_location` | `southindia` (optional) |
+| `TF_VAR_resource_group_name` | `aks-sutramind-rg` (optional) |
+| `TF_VAR_cluster_name` | `aks-sutramind` (optional) |
+| `TF_VAR_node_count` | `1` (optional) |
+| `TF_VAR_node_vm_size` | `Standard_B2s` (optional) |
+| `TF_VAR_os_disk_size_gb` | `30` (optional) |
 
 ### `sample-app` only (after Terraform apply)
 
@@ -173,7 +179,7 @@ permissions:
   contents: read
 ```
 
-Workflows use `azure/login@v2` with `client-id` / `tenant-id` / `subscription-id` from **vars** — never `creds:` / `AZURE_CREDENTIALS`.
+Workflows use `azure/login@v3` with `client-id` / `tenant-id` / `subscription-id` from **vars** — never `creds:` / `AZURE_CREDENTIALS`.
 
 ---
 
@@ -187,22 +193,3 @@ Workflows use `azure/login@v2` with `client-id` / `tenant-id` / `subscription-id
 | `subscription_id must be specified` | Set Variable `AZURE_SUBSCRIPTION_ID` in GitHub repository Variables. |
 | Login looks for a secret | You may still have old workflow expecting Secrets — pull latest workflows that use `vars.*`. |
 | ACR push denied | Finish aks-infra apply; set `ACR_NAME` on sample-app. |
-
-
-## 6. Current private-repository deployment flow
-
-This repository does not depend on GitHub Environment required-reviewer gates.
-
-1. A push/merge to `main` runs `.github/workflows/terraform-plan.yml`.
-2. The workflow runs `terraform init`, `validate`, and `plan`.
-3. The binary plan, readable `tfplan.txt`, and metadata are uploaded as an artifact.
-4. Review `tfplan.txt` in the completed workflow run.
-5. Manually run `.github/workflows/terraform-apply.yml`.
-6. Provide the plan workflow run ID, the reviewed commit SHA, the same environment, and type `APPLY`.
-7. The apply workflow downloads the exact artifact and verifies repository, environment, commit, run ID, and state key before applying.
-
-The Azure federated credential for `aks-infra` should trust the `main` branch immutable subject:
-
-`repo:sunilkrdeep@15242155/aks-infra@1362295953:ref:refs/heads/main`
-
-No client secret is required.
