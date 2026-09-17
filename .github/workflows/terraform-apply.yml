@@ -1,0 +1,155 @@
+name: Terraform Apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to apply"
+        required: true
+        type: choice
+        options:
+          - ci01
+          - ci02
+          - prod
+        default: ci01
+      plan_run_id:
+        description: "GitHub Actions run ID of the reviewed Terraform Plan"
+        required: true
+        type: string
+      commit_sha:
+        description: "Commit SHA shown in plan-metadata.txt"
+        required: true
+        type: string
+      confirm_apply:
+        description: "Type APPLY to confirm that the reviewed plan may be applied"
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+  ARM_USE_OIDC: "true"
+  ARM_USE_AZUREAD: "true"
+  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  TF_VERSION: "1.9.8"
+
+jobs:
+  apply:
+    name: Review and Apply
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Confirm apply
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.confirm_apply }}" != "APPLY" ]; then
+            echo "ERROR: confirm_apply must be exactly APPLY."
+            exit 1
+          fi
+
+      - name: Checkout reviewed commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+
+      - name: Verify reviewed commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "${{ inputs.commit_sha }}" ]; then
+            echo "ERROR: Checked-out commit does not match the reviewed plan."
+            exit 1
+          fi
+          echo "Reviewed commit: $ACTUAL_SHA"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Select state key
+        id: state
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ inputs.environment }}" in
+            ci01) echo "state_key=ci01.tfstate" >> "$GITHUB_OUTPUT" ;;
+            ci02) echo "state_key=ci02.tfstate" >> "$GITHUB_OUTPUT" ;;
+            prod) echo "state_key=prod.tfstate" >> "$GITHUB_OUTPUT" ;;
+            *) echo "ERROR: Unsupported environment"; exit 1 ;;
+          esac
+
+      - name: Create backend configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > backend.hcl <<EOF
+          resource_group_name  = "${{ vars.TF_STATE_RESOURCE_GROUP }}"
+          storage_account_name = "${{ vars.TF_STATE_STORAGE_ACCOUNT }}"
+          container_name       = "${{ vars.TF_STATE_CONTAINER }}"
+          key                  = "${{ steps.state.outputs.state_key }}"
+          use_azuread_auth     = true
+          use_oidc             = true
+          subscription_id      = "${{ vars.AZURE_SUBSCRIPTION_ID }}"
+          tenant_id            = "${{ vars.AZURE_TENANT_ID }}"
+          client_id            = "${{ vars.AZURE_CLIENT_ID }}"
+          EOF
+
+      - name: Terraform Init
+        run: terraform init -input=false -backend-config=backend.hcl
+
+      - name: Download reviewed Terraform plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan-${{ inputs.environment }}
+          path: .
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.plan_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify reviewed plan metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat plan-metadata.txt
+
+          EXPECTED_REPO="${{ github.repository }}"
+          EXPECTED_ENV="${{ inputs.environment }}"
+          EXPECTED_SHA="${{ inputs.commit_sha }}"
+
+          grep -Fxq "repository=$EXPECTED_REPO" plan-metadata.txt
+          grep -Fxq "environment=$EXPECTED_ENV" plan-metadata.txt
+          grep -Fxq "commit_sha=$EXPECTED_SHA" plan-metadata.txt
+          grep -Fxq "workflow_run_id=${{ inputs.plan_run_id }}" plan-metadata.txt
+          grep -Fxq "state_key=${{ steps.state.outputs.state_key }}" plan-metadata.txt
+
+          echo "Reviewed plan metadata verified."
+
+      - name: Display reviewed Terraform plan
+        run: |
+          echo "============================================================"
+          echo "REVIEWED PLAN — ${{ inputs.environment }}"
+          echo "============================================================"
+          cat tfplan.txt
+
+      - name: Terraform Apply
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Terraform Outputs
+        run: terraform output
