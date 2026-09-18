@@ -5,7 +5,6 @@
 #   az login
 #   az account show --query id -o tsv
 
-subscription_id     = "3a5237f2-fd9c-490b-a303-8bd660d58441"
 location            = "southindia"
 resource_group_name = "aks-sutramind-rg"
 cluster_name        = "aks-sutramind"
