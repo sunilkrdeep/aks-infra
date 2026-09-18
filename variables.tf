@@ -121,13 +121,3 @@ variable "tags" {
   }
 }
 
-resource "random_string" "suffix" {
-  length  = 4
-  special = false
-  upper   = false
-
-  keepers = {
-    # Keeps the same suffix as long as the resource group name stays the same
-    rg_name = var.resource_group_name
-  }
-}
