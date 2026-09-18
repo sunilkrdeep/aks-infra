@@ -15,6 +15,17 @@ import {
   to = azurerm_resource_group.aks
   id = "/subscriptions/3a5237f2-fd9c-490b-a303-8bd660d58441/resourceGroups/aks-sutramind-rg"
 }
+
+import {
+  to = azurerm_virtual_network.aks
+  id = "/subscriptions/3a5237f2-fd9c-490b-a303-8bd660d58441/resourceGroups/aks-sutramind-rg/providers/Microsoft.Network/virtualNetworks/aks-sutramind-vnet"
+}
+
+import {
+  to = azurerm_subnet.aks
+  id = "/subscriptions/3a5237f2-fd9c-490b-a303-8bd660d58441/resourceGroups/aks-sutramind-rg/providers/Microsoft.Network/virtualNetworks/aks-sutramind-vnet/subnets/snet-aks"
+}
+
 resource "azurerm_resource_group" "aks" {
   name     = var.resource_group_name
   location = var.location
