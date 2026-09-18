@@ -16,7 +16,7 @@ enable_cluster = true
 kubernetes_version = ""
 
 # 1 worker-node VM (lab). Control plane is Azure-managed (not a VM you create).
-node_count      = 2
+node_count      = 1
 node_vm_size    = "Standard_B2s_v2"
 os_disk_size_gb = 30
 
