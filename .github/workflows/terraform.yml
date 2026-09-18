@@ -55,9 +55,6 @@ jobs:
           VAR_CLIENT: ${{ vars.AZURE_CLIENT_ID }}
           VAR_TENANT: ${{ vars.AZURE_TENANT_ID }}
           VAR_SUB: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          SEC_CLIENT: ${{ secrets.AZURE_CLIENT_ID }}
-          SEC_TENANT: ${{ secrets.AZURE_TENANT_ID }}
-          SEC_SUB: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
           CLIENT_ID="$(echo "${VAR_CLIENT:-$SEC_CLIENT}" | tr -d '[:space:]')"
           TENANT_ID="$(echo "${VAR_TENANT:-$SEC_TENANT}" | tr -d '[:space:]')"
@@ -88,8 +85,7 @@ jobs:
           echo "ARM_CLIENT_ID=${{ steps.azure.outputs.client_id }}" >> "$GITHUB_ENV"
           echo "ARM_TENANT_ID=${{ steps.azure.outputs.tenant_id }}" >> "$GITHUB_ENV"
           echo "ARM_SUBSCRIPTION_ID=${{ steps.azure.outputs.subscription_id }}" >> "$GITHUB_ENV"
-          echo "TF_VAR_subscription_id=${{ steps.azure.outputs.subscription_id }}" >> "$GITHUB_ENV"
-
+      
       - name: Terraform Format Check
         id: fmt
         run: terraform fmt -check -recursive

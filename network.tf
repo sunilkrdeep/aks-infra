@@ -11,7 +11,10 @@
 # an Azure-managed subscription. Nodes talk to the API server over a
 # private-link / tunnel that AKS sets up for you.
 # -----------------------------------------------------------------------------
-
+import {
+  to = azurerm_resource_group.aks
+  id = "/subscriptions/3a5237f2-fd9c-490b-a303-8bd660d58441/resourceGroups/aks-sutramind-rg"
+}
 resource "azurerm_resource_group" "aks" {
   name     = var.resource_group_name
   location = var.location
