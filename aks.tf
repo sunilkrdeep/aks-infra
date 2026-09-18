@@ -15,7 +15,10 @@
 #   If you need a self-managed master VM you would build kubeadm / k3s on
 #   raw VMs instead — that is not AKS.
 # -----------------------------------------------------------------------------
-
+import {
+  to = azurerm_kubernetes_cluster.aks[0]
+  id = "/subscriptions/3a5237f2-fd9c-490b-a303-8bd660d58441/resourceGroups/aks-sutramind-rg/providers/Microsoft.ContainerService/managedClusters/aks-sutramind"
+}
 resource "azurerm_kubernetes_cluster" "aks" {
   count               = var.enable_cluster ? 1 : 0
   name                = var.cluster_name
