@@ -52,9 +52,9 @@ jobs:
       - name: Resolve Azure OIDC IDs
         id: azure
         run: |
-          CLIENT_ID="$(echo "${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}" | tr -d '[:space:]')"
-          TENANT_ID="$(echo "${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}" | tr -d '[:space:]')"
-          SUBSCRIPTION_ID="$(echo "${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}" | tr -d '[:space:]')"
+          CLIENT_ID="$(echo "${{ vars.AZURE_CLIENT_ID}}" | tr -d '[:space:]')"
+          TENANT_ID="$(echo "${{ vars.AZURE_TENANT_ID}}" | tr -d '[:space:]')"
+          SUBSCRIPTION_ID="$(echo "${{ vars.AZURE_SUBSCRIPTION_ID}}" | tr -d '[:space:]')"
           if [ -z "$CLIENT_ID" ] || [ -z "$TENANT_ID" ] \vert{}\vert{} [ -z "$SUBSCRIPTION_ID" ]; then
             echo "::error::Missing AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID."
             exit 1
@@ -181,9 +181,9 @@ jobs:
       - name: Resolve Azure OIDC IDs
         id: azure
         run: |
-          CLIENT_ID="$(echo "${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}" | tr -d '[:space:]')"
-          TENANT_ID="$(echo "${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}" | tr -d '[:space:]')"
-          SUBSCRIPTION_ID="$(echo "${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}" | tr -d '[:space:]')"
+          CLIENT_ID="$(echo "${{ vars.AZURE_CLIENT_ID}}" | tr -d '[:space:]')"
+          TENANT_ID="$(echo "${{ vars.AZURE_TENANT_ID}}" | tr -d '[:space:]')"
+          SUBSCRIPTION_ID="$(echo "${{ vars.AZURE_SUBSCRIPTION_ID}}" | tr -d '[:space:]')"
           echo "client_id=$CLIENT_ID" >> "$GITHUB_OUTPUT"
           echo "tenant_id=$TENANT_ID" >> "$GITHUB_OUTPUT"
           echo "subscription_id=$SUBSCRIPTION_ID" >> "$GITHUB_OUTPUT"
